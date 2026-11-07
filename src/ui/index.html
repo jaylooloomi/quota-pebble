@@ -37,7 +37,20 @@
       </header>
       <div class="panel-body">
         <div class="context-line"><div class="view-tabs" role="tablist" aria-label="配額與帳號"><button id="tab-quota" role="tab" aria-selected="true" aria-controls="cards"><svg><use href="#i-chart"/></svg>配額</button><button id="tab-accounts" role="tab" aria-selected="false" aria-controls="cards"><svg><use href="#i-user"/></svg>帳號</button><button id="tab-tasks" role="tab" aria-selected="false" aria-controls="task-panel" data-localized-text><svg aria-hidden="true"><use href="#i-tasks"/></svg><span class="task-tab-label">任務</span></button><button id="tab-messages" role="tab" aria-selected="false" aria-controls="messages-panel" data-localized-text><svg aria-hidden="true"><use href="#i-message"/></svg><span id="messages-tab-label">訊息</span></button></div><h2 id="mode-label">剩餘額度</h2></div><section id="task-panel" role="tabpanel" aria-labelledby="tab-tasks" data-localized-text hidden></section>
-        <section id="messages-panel" role="tabpanel" aria-labelledby="tab-messages" data-localized-text hidden><div class="messages-heading"><h3 id="feed-heading"></h3><button id="feed-new" class="message-action primary" aria-expanded="false" aria-controls="feed-form"></button></div><form id="feed-form" class="feed-input-row" hidden><input id="feed-url" type="url" placeholder="https://example.com/feed.xml" maxlength="2048" aria-label="RSS URL"><button id="feed-add" type="submit"></button></form><p id="feed-error" role="alert" hidden></p><div class="messages-toolbar"><label id="feed-mute-label"><span></span><input id="feed-mute" type="checkbox" role="switch"></label><span id="feed-pending"></span><button id="feed-preview" class="message-action"></button></div><div id="feed-sources"></div><p id="feed-empty"></p><p id="feed-help"></p></section>
+        <section id="messages-panel" role="tabpanel" aria-labelledby="tab-messages" data-localized-text hidden>
+          <div class="messages-heading"><h3 id="feed-heading"></h3></div>
+          <div class="messages-toolbar">
+            <label id="feed-mute-label"><span></span><input id="feed-mute" type="checkbox" role="switch"></label>
+            <span id="feed-pending"></span>
+            <div class="messages-actions">
+              <button id="feed-new" class="message-action" aria-expanded="false" aria-controls="feed-form"></button>
+              <button id="feed-preview" class="message-action"></button>
+            </div>
+          </div>
+          <form id="feed-form" class="feed-input-row" hidden><input id="feed-url" type="url" placeholder="https://example.com/feed.xml" maxlength="2048" aria-label="RSS URL"><button id="feed-add" type="submit"></button></form>
+          <p id="feed-error" role="alert" hidden></p>
+          <div id="feed-sources"></div><p id="feed-empty"></p><p id="feed-help"></p>
+        </section>
         <section id="settings" class="settings" hidden aria-label="設定">
           <div class="settings-title">顯示與提醒 <span id="app-version"></span></div>
           <label>語言<select id="language" aria-label="語言"><option value="zh-TW">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select></label>
