@@ -51,11 +51,17 @@ export class ClaudeWebQuota {
       const account=await this.get('/api/account');
       const accountId=account?.uuid??account?.account?.uuid;
       if(typeof accountId!=='string'||!accountId)throw new ProviderError('schema','無法確認 Claude 網頁帳號身分');
-      const orgs=await this.organizations();if(!orgs.some(row=>row.id===org))throw new ProviderError('auth','目前帳號不屬於選取的 Claude 組織');
+      const organization=(await this.organizations()).find(row=>row.id===org);
+      if(!organization)throw new ProviderError('auth','目前帳號不屬於選取的 Claude 組織');
       const data=await this.get(`/api/organizations/${org}/usage`);
       // Recheck identity before publishing, in case login switched during the request.
       const after=await this.get('/api/account');if((after?.uuid??after?.account?.uuid)!==accountId)throw new ProviderError('auth','Claude 帳號已變更，請重新確認組織');
-      const reading={...parseClaude(data,orgs.find(row=>row.id===org)?.plan??null),source:'Claude 網頁 · 非公開配額端點',identityKey:createHash('sha256').update(`${accountId}:${org}`).digest('hex')};
+      // The organization list can omit plan details that are present in the account's membership.
+      const memberships=after.memberships??after.account?.memberships;
+      const membership=Array.isArray(memberships)?memberships.find(row=>row?.organization?.uuid===org):undefined;
+      const teamSeat=typeof membership?.seat_tier==='string'&&/^team_(?:standard|premium|tier_[12])$/i.test(membership.seat_tier);
+      const plan=organization.plan??claudeWebPlan(membership?.organization)??(teamSeat?'Team':null);
+      const reading={...parseClaude(data,plan),source:'Claude 網頁 · 非公開配額端點',identityKey:createHash('sha256').update(`${accountId}:${org}`).digest('hex')};
       this.cached={at:this.now(),org,reading};return reading;
     })();this.pending=job;void job.finally(()=>{this.pending=undefined;}).catch(()=>{});return job;
   }
