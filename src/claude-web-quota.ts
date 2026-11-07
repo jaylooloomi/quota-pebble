@@ -2,15 +2,34 @@ import {createHash} from 'node:crypto';
 import {parseClaude,ProviderError,Reading} from './model';
 import {retryDelay} from './http';
 
-export function claudeWebPlan(org:any):string|null{
-  // Never infer the subscription from an organization display name.
-  const tier=[org?.rate_limit_tier,org?.subscription_type,org?.plan,org?.organization_type].filter(value=>typeof value==='string').join(' ').toLowerCase();
-  if(/(?:^|[_\s-])enterprise(?:$|[_\s-])/.test(tier))return 'Enterprise';
-  if(/(?:^|[_\s-])teams?(?:$|[_\s-])/.test(tier))return 'Team';
-  if(/(?:^|[_\s-])ultra(?:$|[_\s-])/.test(tier))return 'Ultra';
-  if(/(?:^|[_\s-])max(?:$|[_\s-])/.test(tier))return 'Max';
-  if(/(?:^|[_\s-])pro(?:$|[_\s-])/.test(tier))return 'Pro';
+const PLAN_ORDER=['Enterprise','Team','Ultra','Max','Pro','Free'] as const;
+type ClaudePlan=(typeof PLAN_ORDER)[number];
+const normalizePlan=(value:unknown)=>typeof value==='string'?value.trim().toLowerCase().replace(/[\s-]+/g,'_'):'';
+
+function parsePlanCode(value:unknown):ClaudePlan|null{
+  const code=normalizePlan(value).replace(/^default_/,'').replace(/^claude_/,'');
+  if(/^enterprise(?:_(?:seat_based|usage_based))?$/.test(code))return 'Enterprise';
+  if(/^teams?(?:_(?:standard|premium|tier_[12]))?$/.test(code))return 'Team';
+  if(code==='ultra'||code==='max_20x')return 'Ultra';
+  if(code==='max'||code==='max_5x')return 'Max';
+  if(code==='pro')return 'Pro';
+  if(code==='free')return 'Free';
   return null;
+}
+
+function selectPlan(plans:readonly (ClaudePlan|null)[]):ClaudePlan|null{
+  return PLAN_ORDER.find(plan=>plans.includes(plan))??null;
+}
+
+export function claudeWebPlan(org:any):ClaudePlan|null{
+  // Read plan fields from the selected organization, never its display name.
+  return selectPlan([org?.organization_type,org?.subscription_type,org?.plan,org?.rate_limit_tier].map(parsePlanCode));
+}
+
+function capabilityPlan(org:any):ClaudePlan|null{
+  if(!Array.isArray(org?.capabilities))return null;
+  const plans=org.capabilities.filter((value:unknown)=>normalizePlan(value).startsWith('claude_')).map(parsePlanCode);
+  return selectPlan(plans);
 }
 
 // Inject an Electron Session.fetch bound to a dedicated account partition.
@@ -38,9 +57,12 @@ export class ClaudeWebQuota {
     catch(e){if(e instanceof ProviderError)throw e;throw new ProviderError('network','Claude 網頁回應讀取失敗');}
     try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new ProviderError('schema','Claude 網頁回傳格式無法辨識');}
   }
-  async organizations():Promise<{id:string;name:string;plan:string|null}[]>{
+  async organizations():Promise<{id:string;name:string;plan:ClaudePlan|null;capability:ClaudePlan|null;legacyPro:boolean}[]>{
     const rows=await this.get('/api/organizations');if(!Array.isArray(rows))throw new ProviderError('schema','Claude 組織清單格式無法辨識');
-    return rows.slice(0,50).filter(row=>typeof row?.uuid==='string'&&/^[a-f0-9-]{36}$/.test(row.uuid)).map(row=>({id:row.uuid,name:typeof row.name==='string'?row.name.slice(0,100):'Claude',plan:claudeWebPlan(row)}));
+    return rows.slice(0,50).filter(row=>typeof row?.uuid==='string'&&/^[a-f0-9-]{36}$/.test(row.uuid)).map(row=>({
+      id:row.uuid,name:typeof row.name==='string'?row.name.slice(0,100):'Claude',
+      plan:claudeWebPlan(row),capability:capabilityPlan(row),legacyPro:normalizePlan(row.rate_limit_tier)==='default_claude_ai'
+    }));
   }
   read(org:string):Promise<Reading>{
     if(!/^[a-f0-9-]{36}$/.test(org))return Promise.reject(new ProviderError('schema','Invalid Claude organization'));
@@ -59,8 +81,13 @@ export class ClaudeWebQuota {
       // The organization list can omit plan details that are present in the account's membership.
       const memberships=after.memberships??after.account?.memberships;
       const membership=Array.isArray(memberships)?memberships.find(row=>row?.organization?.uuid===org):undefined;
-      const teamSeat=typeof membership?.seat_tier==='string'&&/^team_(?:standard|premium|tier_[12])$/i.test(membership.seat_tier);
-      const plan=organization.plan??claudeWebPlan(membership?.organization)??(teamSeat?'Team':null);
+      const memberOrg=membership?.organization;
+      const seat=normalizePlan(membership?.seat_tier);
+      const teamSeat=/^team_(?:standard|premium|tier_[12])$/.test(seat)?'Team':null;
+      const legacyPro=organization.legacyPro||normalizePlan(memberOrg?.rate_limit_tier)==='default_claude_ai';
+      const plan=selectPlan([organization.plan,claudeWebPlan(memberOrg),teamSeat])
+        ??selectPlan([organization.capability,capabilityPlan(memberOrg)])
+        ??(legacyPro?'Pro':null);
       const reading={...parseClaude(data,plan),source:'Claude 網頁 · 非公開配額端點',identityKey:createHash('sha256').update(`${accountId}:${org}`).digest('hex')};
       this.cached={at:this.now(),org,reading};return reading;
     })();this.pending=job;void job.finally(()=>{this.pending=undefined;}).catch(()=>{});return job;
