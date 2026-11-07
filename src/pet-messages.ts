@@ -7,6 +7,8 @@ import {readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
 import path from 'node:path';
 export type PetMessage={id:string;title:string;source:string;time:number;sourceId?:string};
 type Source={id:string;url:string;enabled:boolean;seeded:boolean;seen:string[];checkedAt:number;error:boolean};
+const GITHUB_BLOG_FEED='https://github.blog/feed/';
+const createSource=(url:string):Source=>({id:randomUUID(),url,enabled:true,seeded:false,seen:[],checkedAt:0,error:false});
 const clean=(v:unknown,n=160)=>typeof v==='string'?v.replace(/<[^>]*>/g,' ').replace(/[\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().slice(0,n):'';
 const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
 export function feedUrl(value:unknown):URL{if(typeof value!=='string'||value.length>2048)throw Error('INVALID_FEED_URL');const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||u.port&&u.port!=='443'||u.hash||u.hostname==='localhost'||u.hostname.endsWith('.localhost'))throw Error('INVALID_FEED_URL');return u;}
@@ -27,10 +29,35 @@ export function parseFeed(xml:string):{key:string;title:string;time:number|null}
 }
 export class PetMessages{
   private sources:Source[]=[];private queue:PetMessage[]=[];private busy=false;private timer?:NodeJS.Timeout;private muted=false;private closed=false;private overflow=0;
-  constructor(private file:string,private changed:()=>void,private fetcher=fetchFeed,private now=Date.now,private network=true){try{const raw=readFileSync(file);if(raw.length>256*1024)throw Error();const data=JSON.parse(raw.toString());this.muted=data.muted===true;for(const s of (Array.isArray(data.sources)?data.sources:[]).slice(0,8)){try{this.sources.push({id:randomUUID(),url:feedUrl(s.url).href,enabled:s.enabled===true,seeded:s.seeded===true,seen:(Array.isArray(s.seen)?s.seen:[]).filter((x:unknown)=>typeof x==='string'&&/^[a-f0-9]{64}$/.test(x)).slice(-200),checkedAt:0,error:false});}catch{}}}catch{}}
-  snapshot(){return{muted:this.muted,overflow:this.overflow,sources:this.sources.map(s=>({id:s.id,url:s.url,label:new URL(s.url).hostname,enabled:s.enabled,checkedAt:s.checkedAt,error:s.error})),items:[...this.queue]};}
+  constructor(private file:string,private changed:()=>void,private fetcher=fetchFeed,private now=Date.now,private network=true){
+    let data:any;
+    try{
+      const raw=readFileSync(file);
+      if(raw.length>256*1024)return;
+      data=JSON.parse(raw.toString());
+    }catch(error){
+      if((error as NodeJS.ErrnoException).code!=='ENOENT')return;
+      data={version:1,sources:[]};
+    }
+    if(!data||!Array.isArray(data.sources))return;
+    this.muted=data.muted===true;
+    for(const s of data.sources.slice(0,8)){
+      try{
+        this.sources.push({...createSource(feedUrl(s.url).href),enabled:s.enabled===true,seeded:s.seeded===true,
+          seen:(Array.isArray(s.seen)?s.seen:[]).filter((x:unknown)=>typeof x==='string'&&/^[a-f0-9]{64}$/.test(x)).slice(-200)});
+      }catch{}
+    }
+    // Mark the default as offered even if the list is full or the feed already exists.
+    if(data.version===1){
+      if(this.sources.length<8&&!this.sources.some(s=>s.url===GITHUB_BLOG_FEED)){
+        this.sources.push(createSource(GITHUB_BLOG_FEED));
+      }
+      this.save();
+    }
+  }
+  snapshot(){return{muted:this.muted,overflow:this.overflow,sources:this.sources.map(s=>({id:s.id,url:s.url,label:s.url===GITHUB_BLOG_FEED?'GitHub Blog':new URL(s.url).hostname,enabled:s.enabled,checkedAt:s.checkedAt,error:s.error})),items:[...this.queue]};}
   start(){if(!this.network||this.closed||this.timer)return;this.timer=setInterval(()=>void this.tick(),60000);this.timer.unref();void this.tick();}
-  configure(action:unknown,value:unknown){if(action==='add'){if(this.sources.length>=8)throw Error('FEED_LIMIT');const url=feedUrl(value).href;if(this.sources.some(s=>s.url===url))return;this.sources.push({id:randomUUID(),url,enabled:true,seeded:false,seen:[],checkedAt:0,error:false});}
+  configure(action:unknown,value:unknown){if(action==='add'){if(this.sources.length>=8)throw Error('FEED_LIMIT');const url=feedUrl(value).href;if(this.sources.some(s=>s.url===url))return;this.sources.push(createSource(url));}
     else if(action==='mute'){if(typeof value!=='boolean')throw Error('INVALID_FEED_ACTION');this.muted=value;if(value){this.queue=[];this.overflow=0;}}
     else if(action==='remove'||action==='toggle'){const source=this.sources.find(s=>s.id===value);if(!source)throw Error('UNKNOWN_FEED');if(action==='remove'){this.sources=this.sources.filter(s=>s!==source);this.queue=this.queue.filter(m=>m.sourceId!==source.id);}else{source.enabled=!source.enabled;if(!source.enabled)this.queue=this.queue.filter(m=>m.sourceId!==source.id);}}
     else throw Error('INVALID_FEED_ACTION');this.save();this.changed();if(action==='add')void this.tick();}
@@ -40,5 +67,5 @@ export class PetMessages{
   async tick(){if(this.busy||this.closed||!this.network||this.muted)return;this.busy=true;try{for(const source of this.sources.filter(s=>s.enabled&&(!s.checkedAt||this.now()-s.checkedAt>=15*60000))){source.checkedAt=this.now();try{const rows=parseFeed(await this.fetcher(source.url));if(this.closed||!this.sources.includes(source)||!source.enabled)continue;const previous=new Set(source.seen);if(source.seeded)for(const row of [...rows].reverse()){if(!previous.has(row.key)&&(row.time===null||row.time>=this.now()-86400000&&row.time<=this.now()+60000)){this.enqueue({id:hash(source.id+row.key),title:row.title,source:new URL(source.url).hostname,sourceId:source.id,time:row.time??this.now()});previous.add(row.key);}}source.seen=[...new Set([...source.seen,...rows.map(r=>r.key)])].slice(-200);source.seeded=true;source.error=false;}catch{source.error=true;}}
     this.save();this.changed();}finally{this.busy=false;}}
   close(){this.closed=true;clearInterval(this.timer);this.queue=[];}
-  private save(){try{mkdirSync(path.dirname(this.file),{recursive:true});writeFileSync(this.file+'.tmp',JSON.stringify({version:1,muted:this.muted,sources:this.sources.map(({url,enabled,seen,seeded})=>({url,enabled,seen,seeded}))}),{mode:0o600});renameSync(this.file+'.tmp',this.file);}catch{/* Feed storage does not stop quota monitoring. */}}
+  private save(){try{mkdirSync(path.dirname(this.file),{recursive:true});writeFileSync(this.file+'.tmp',JSON.stringify({version:2,muted:this.muted,sources:this.sources.map(({url,enabled,seen,seeded})=>({url,enabled,seen,seeded}))}),{mode:0o600});renameSync(this.file+'.tmp',this.file);}catch{/* Feed storage does not stop quota monitoring. */}}
 }
