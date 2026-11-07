@@ -1,0 +1,11 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
+const {DatabaseSync}=require('node:sqlite');
+const {ownedChromeHasSession,closeOwnedChromeWindow,signedInChromeTitle}=require('../dist/chrome-login-presence');
+test('automatic closure accepts only an explicit signed-in new-chat title',()=>{for(const title of ['New session - Claude','New chat - Claude - Google Chrome','新對話 - Claude','新しいチャット - Claude','새 채팅 - Claude'])assert.equal(signedInChromeTitle(title),true,title);for(const title of ['Sign in - Claude','Claude','Just a moment...','正在執行安全驗證','Sign in - Google Accounts','Private task - Claude'])assert.equal(signedInChromeTitle(title),false,title);});
+test('login presence reads only a boolean from the owned profile and preserves database bytes',()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'pebble-presence-')),dir=path.join(root,'chrome-login'),file=path.join(dir,'Default','Network','Cookies');fs.mkdirSync(path.dirname(file),{recursive:true});let db=new DatabaseSync(file);try{
+ db.exec('CREATE TABLE cookies(host_key TEXT,name TEXT,expires_utc INTEGER,encrypted_value BLOB,value TEXT)');const insert=db.prepare('INSERT INTO cookies VALUES(?,?,?,?,?)');insert.run('.google.com','sessionKey',0,Buffer.from('fixture-not-real'),'');assert.equal(ownedChromeHasSession(dir),false);
+ insert.run('.claude.ai','sessionKey',1,Buffer.from('fixture-expired'),'');assert.equal(ownedChromeHasSession(dir),false);insert.run('.claude.ai','sessionKey',0,Buffer.from('fixture-encrypted-not-real'),'');db.close();db=null;
+ const before=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');assert.equal(ownedChromeHasSession(dir),true);assert.equal(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),before);
+ assert.equal(ownedChromeHasSession(root),false);assert.equal(ownedChromeHasSession(path.join(root,'missing','chrome-login')),false);
+ }finally{db?.close();fs.rmSync(root,{recursive:true,force:true});}});
+test('auto-close rejects non-owned profile paths and invalid process ids',async()=>{assert.equal(await closeOwnedChromeWindow(-1,path.join(os.tmpdir(),'chrome-login'),'chrome.exe'),false);assert.equal(await closeOwnedChromeWindow(process.pid,os.homedir(),process.execPath),false);});

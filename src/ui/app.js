@@ -38,7 +38,7 @@ function renderCompactClaude(){
 const quotaCardHeights={};
 function closeFooterPopover(focus=false){const trigger=footerPopover==='language'?'language-shortcut':'sync-shortcut';footerPopover=null;render(state);if(focus)$(trigger).focus();}
 function openFooterPopover(kind){footerPopover=footerPopover===kind?null:kind;settingsOpen=false;render(state);if(footerPopover==='language')$('language-popover').querySelector('[aria-checked="true"]').focus();else if(footerPopover==='sync')$('sync-popover').focus();}
-function setView(view){currentView=view;settingsOpen=false;activeDetail=null;confirmLogout=null;footerPopover=null;quotaDetailsOpen=false;paceDetailsProvider=null;render(state);}
+function setView(view){if(view==='tasks')void api.tasksStart();currentView=view;settingsOpen=false;activeDetail=null;confirmLogout=null;footerPopover=null;quotaDetailsOpen=false;paceDetailsProvider=null;render(state);}
 function renderFooter(){
   const enabled=ids.map(id=>state.providers[id]).filter(s=>s.enabled);
   const busy=syncBusy||enabled.some(s=>s.status==='loading'||s.refreshing);
@@ -122,9 +122,9 @@ function tone(w){return w.usedPercent>=95?'danger':w.usedPercent>=80?'warning':'
 function ready(s){return s.enabled&&s.status==='ready'&&s.reading&&(!s.updatedAt||Date.now()-Date.parse(s.updatedAt)<24*3600000);}
 function sourceFor(id){
   if(id==='gemini')return state.settings.googleSource==='antigravity'?'Antigravity 本機服務的 Gemini 模型配額；沿用 Antigravity 帳號，需保持 Antigravity 執行。這不是 Gemini 網頁版或企業 Code Assist 額度。':'企業 Code Assist OAuth 配額；個人版請選擇 Antigravity 來源。';
-  return id==='codex'?'官方 Codex app-server · account/rateLimits/read。由 Codex CLI 管理 ChatGPT 帳號授權。':'官方 Claude Code 管理登入，讀取本機授權後查詢 Claude OAuth 用量端點。';
+  return id==='codex'?'官方 Codex app-server · account/rateLimits/read。由 Codex CLI 管理 ChatGPT 帳號授權。':state.claudeQuotaSource==='web'?'使用 Chrome 登入，完成後自動關閉專用視窗並同步；每 15 分鐘更新配額。':'官方 Claude Code 管理登入，讀取本機授權後查詢 Claude OAuth 用量端點。';
 }
-function startLogin(id){activeDetail=id;void api.login(id);}
+function startLogin(id){activeDetail=id;settingsOpen=false;render(state);if(!state.auth[id]?.pending)void api.login(id);}
 function makeCards(){
   for(const id of ids){
     if(cardNodes[id])continue;
@@ -157,12 +157,13 @@ function makeCards(){
     grip.addEventListener('keydown',event=>{if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key))return;const order=state.settings.order,index=order.indexOf(id),target=order[index+(event.key==='ArrowUp'?-1:1)];if(target){event.preventDefault();moveProvider(id,target);grip.focus();}});
     card.querySelector('.connection-status').addEventListener('click',()=>{activeDetail=activeDetail===id?null:id;render(state);});
     card.querySelector('.close-connection').addEventListener('click',()=>{activeDetail=null;render(state);});
-      card.querySelector('.connect-primary').addEventListener('click',()=>{const s=state.providers[id];if(s.status==='unavailable'&&!/429|限制查詢|查詢頻率/.test(s.error??''))void api.refresh();else startLogin(id);});
+      card.querySelector('.connect-primary').addEventListener('click',()=>{if(state.auth[id]?.pending){startLogin(id);return;}const s=state.providers[id];if(baseId(id)==='claude'&&s.errorCode==='rate_limit'){void api.openProvider('claude');return;}if(s.status==='unavailable'&&!/429|限制查詢|查詢頻率/.test(s.error??''))void api.refresh();else startLogin(id);});
     card.querySelector('.continue-claude-login').addEventListener('click',()=>api.continueClaudeLogin(id));
-    card.querySelector('.login').addEventListener('click',()=>startLogin(id));
+    card.querySelector('.login').addEventListener('click',()=>{if(baseId(id)==='claude'&&state.providers[id].errorCode==='rate_limit'&&!state.auth[id]?.pending){void api.openProvider('claude');return;}startLogin(id);});
     card.querySelector('.quota-details-link').addEventListener('click',()=>{window.UsageTrends.close();quotaDetailsProvider=id;quotaDetailsOpen=true;activeDetail=null;settingsOpen=false;footerPopover=null;render(state);});
     card.querySelector('.pace-link').addEventListener('click',()=>{window.UsageTrends.close();paceDetailsProvider=paceDetailsProvider===id?null:id;quotaDetailsOpen=false;activeDetail=null;footerPopover=null;render(state);});
     card.querySelector('.account-switch').addEventListener('click',async()=>{
+      if(state.auth[id]?.pending){startLogin(id);return;}
       if(id==='gemini'&&state.settings.googleSource==='antigravity'){
         activeDetail=id;render(state);const result=await api.antigravityAccount('switch');
         if(!result.ok){state.auth[id]={pending:false,phase:'error',message:result.message};render(state);}
@@ -194,7 +195,7 @@ function renderConnection(id,s,auth){
   card.querySelector('.connection-description').textContent=id==='codex'?'登入要監控的 ChatGPT 訂閱帳號，可與 Claude、Gemini 使用不同帳號。':antigravity?'沿用 Antigravity 的 Google 帳號，讀取 Gemini 配額資訊。':`連接你的 ${id==='gemini'?'Google':names[id]} 帳號以讀取配額資訊。`;
   card.querySelector('.connection-account h4').textContent=baseId(id)==='claude'?'Claude Code':id==='codex'?'Codex':antigravity?'Antigravity · Gemini':'Google Code Assist';
   const phase=auth?.phase;
-  card.querySelector('.continue-claude-login').hidden=phase!=='web_login';
+  card.querySelector('.continue-claude-login').hidden=phase!=='web_login'||!!auth?.automatic;
   const step=connected?4:phase==='syncing'||phase==='cooldown'||phase==='waiting'?2:phase==='connecting'||phase==='verifying'?1:0;
   card.querySelector('.connection-steps').style.setProperty('--progress',`${Math.min(100,step/3*100)}%`);
   for(const node of card.querySelectorAll('.connection-steps li')){
@@ -206,12 +207,14 @@ function renderConnection(id,s,auth){
   message.classList.toggle('success',!!connected);message.classList.toggle('error',phase==='error'||(!auth?.pending&&!['cooldown','waiting'].includes(phase)&&['stale','unavailable'].includes(s.status)));
   const text=phase==='syncing'?'自動同步中…':phase==='connecting'?'連接中…':auth?.pending?'等待授權…':id==='codex'?(connected?'切換 Codex 帳號 →':'登入 Codex（ChatGPT） →'):connected?'重新連接':antigravity?'連接 Antigravity 並同步 →':`登入 ${id==='gemini'?'Google':names[id]} 並同步 →`;
   for(const button of [card.querySelector('.login'),card.querySelector('.connect-primary')]){button.textContent=text;button.disabled=!!auth?.pending||(!s.enabled&&!isExtra(id));}
+  if(auth?.pending){const entry=card.querySelector('.connect-primary');entry.disabled=false;entry.textContent=phase==='web_login'?'繼續登入':'查看登入進度';}
   if(phase==='verifying')card.querySelector('.login').textContent='驗證授權碼中…';
   const limited=/429|限制查詢|查詢頻率/.test(s.error??'');
   card.querySelector('.connect-primary').hidden=false;
   if(limited&&!auth?.pending){for(const button of [card.querySelector('.login'),card.querySelector('.connect-primary')])button.textContent=`登入 ${id==='gemini'?'Google':names[id]}（管理授權） →`;}
-  else if(s.status==='unavailable')card.querySelector('.connect-primary').textContent='重新同步';
-  else if(s.status==='loading'){card.querySelector('.connect-primary').textContent='同步中…';card.querySelector('.connect-primary').disabled=true;}
+  if(limited&&!auth?.pending&&baseId(id)==='claude')for(const button of [card.querySelector('.login'),card.querySelector('.connect-primary')])button.textContent='查看官方配額 ↗';
+  else if(s.status==='unavailable'&&!auth?.pending)card.querySelector('.connect-primary').textContent='重新同步';
+  else if(s.status==='loading'&&!auth?.pending){card.querySelector('.connect-primary').textContent='同步中…';card.querySelector('.connect-primary').disabled=true;}
   card.querySelector('.connection-note').textContent=limited?`目前限制的是配額查詢，不代表已登出。可登入或更新授權；重新登入不會解除限流。${retryLabel(s)||'冷卻後自動重試'}。`:'登入完成後自動更新，不必手動查用量。';
   if(id==='codex')card.querySelector('.connection-note').textContent+=' Codex 使用獨立的 OpenAI／ChatGPT 授權；切換會同步更新本機 Codex CLI 的帳號，不會登出 Claude 或 Gemini。瀏覽器若帶入其他帳號，請選擇使用其他帳號登入。';
   if(auth?.pending)card.querySelector('.connection-note').textContent=phase==='verifying'?'正在等待官方登入程序完成驗證；配額限流不會阻止帳號授權。':'請在瀏覽器完成登入；若選錯帳號，可取消後重試。';
@@ -246,7 +249,7 @@ function renderCard(id){
   card.querySelector('.quota-display-mode').textContent=state.settings.remaining?'剩餘額度':'已用額度';
   if(state.settings.pacing)card.querySelector('.quota-display-mode').textContent='配速建議';
   let status=!s.enabled?'已暫停':s.status==='ready'?'已連接':s.status==='stale'?'更新失敗':s.status==='loading'?'同步中':s.status==='signed_out'?'未連接':limited?'服務限流':'讀取失敗';
-  if(expired)status='資料過期';if(auth?.pending)status=auth.phase==='syncing'?'同步中':'連接中';
+  if(expired)status='資料過期';if(auth?.pending)status=auth.phase==='web_login'?'等待登入':auth.codeRequired?'等待授權碼':auth.phase==='syncing'?'同步中':'連接中';
   card.querySelector('.status-label').textContent=status;
   if(disconnected)card.querySelector('.status-label').textContent='已中斷連接';
   const updated=card.querySelector('.updated');updated.textContent=elapsed(s.updatedAt);updated.title=s.error??(s.updatedAt?new Date(s.updatedAt).toLocaleString():'尚未同步');
@@ -277,8 +280,8 @@ function renderCard(id){
   card.querySelector('.empty-message').title=s.error??'';
   renderConnection(id,s,auth);
   const accountActions=card.querySelector('.account-actions');accountActions.hidden=currentView!=='accounts'||activeDetail===id;
-  const switchButton=card.querySelector('.account-switch');switchButton.textContent=usesAntigravity?'切換帳號':ready(s)?'切換帳號':'登入帳號';
-  switchButton.disabled=!!auth?.pending||logoutBusy===id||(!s.enabled&&!usesAntigravity&&!isExtra(id));
+  const switchButton=card.querySelector('.account-switch');switchButton.textContent=auth?.pending?(auth.phase==='web_login'?'繼續登入':'查看登入進度'):usesAntigravity?'切換帳號':ready(s)?'切換帳號':'登入帳號';
+  switchButton.disabled=logoutBusy===id||(!auth?.pending&&!s.enabled&&!usesAntigravity&&!isExtra(id));
   const logoutButton=card.querySelector('.account-logout');logoutButton.textContent=usesAntigravity?'中斷連接':'登出';logoutButton.hidden=usesAntigravity?!s.enabled:id==='gemini'||!s.reading;logoutButton.disabled=!!auth?.pending||logoutBusy===id;
   card.querySelector('.logout-confirm').hidden=confirmLogout!==id;
   if(isExtra(id))card.querySelector('.logout-confirm p').textContent='只登出此獨立帳號，不影響其他帳號。';
@@ -404,7 +407,7 @@ function render(next){
   $('settings').hidden=!settingsOpen;
   $('settings-toggle').setAttribute('aria-expanded',String(settingsOpen));
   $('cards').hidden=settingsOpen;
-  $('cards').hidden=settingsOpen||quotaDetailsOpen;
+  $('cards').hidden=settingsOpen||quotaDetailsOpen||(currentView==='tasks'||currentView==='messages');
   $('quota-details').hidden=!quotaDetailsOpen||settingsOpen;
   $('pace-details').hidden=!paceDetailsProvider||settingsOpen;
   for(const id of ids){
@@ -414,11 +417,11 @@ function render(next){
   }
   if(paceDetailsProvider)cardNodes[paceDetailsProvider].append($('pace-details'));
   else if($('pace-details').parentElement!==document.querySelector('.panel-body'))document.querySelector('.panel-body').append($('pace-details'));
-  for(const view of ['quota','accounts']){$(`tab-${view}`).setAttribute('aria-selected',String(view===currentView));$(`tab-${view}`).tabIndex=view===currentView?0:-1;}
+  for(const view of ['quota','accounts','tasks','messages']){$(`tab-${view}`).setAttribute('aria-selected',String(view===currentView));$(`tab-${view}`).tabIndex=view===currentView?0:-1;}
   $('cards').setAttribute('role','tabpanel');$('cards').setAttribute('aria-labelledby',`tab-${currentView}`);
   const healthy=!state.paused&&ids.some(id=>ready(state.providers[id]));$('live-dot').classList.toggle('off',!healthy);
   document.querySelector('.footer-dot').classList.toggle('off',!healthy);$('footer-status').textContent=state.paused?'已暫停同步':'自動同步';
-  for(const key of ['autoStart','alwaysOnTop','notifications','petIdle','petAlerts','petRoam'])$(key).checked=state.settings[key];
+  for(const key of ['taskCompletionNotifications','autoStart','alwaysOnTop','notifications','petIdle','petAlerts','petRoam'])$(key).checked=state.settings[key];
   $('autoStart').disabled=!['win32','darwin'].includes(state.platform);
   $('pet-character').value=petDraft?.petCharacter??state.settings.petCharacter??'claude';
   $('pet-placement').value=petDraft?.petPlacement??state.settings.petPlacement??'title';
@@ -433,15 +436,18 @@ function render(next){
   const extraSettings=$('extra-account-settings');extraSettings.replaceChildren();
   for(const account of state.accounts??[]){const label=document.createElement('label'),name=document.createElement('span');name.textContent=account.label;name.setAttribute('data-localized-text','');const input=document.createElement('input');input.type='checkbox';input.setAttribute('role','switch');input.checked=state.settings.visible[account.id]!==false;input.addEventListener('change',()=>api.settings({visible:{[account.id]:input.checked}}));label.append(name,input);extraSettings.append(label);}
   renderCompactClaude();
-  $('add-account-area').hidden=settingsOpen||quotaDetailsOpen;
+  $('add-account-area').hidden=settingsOpen||quotaDetailsOpen||(currentView==='tasks'||currentView==='messages');
   for(const input of document.querySelectorAll('[data-visible]'))input.checked=state.settings.visible?.[input.dataset.visible]!==false;
-  $('no-visible-providers').hidden=settingsOpen||quotaDetailsOpen||ids.some(id=>state.settings.visible?.[id]!==false);
+  $('no-visible-providers').hidden=settingsOpen||quotaDetailsOpen||(currentView==='tasks'||currentView==='messages')||ids.some(id=>state.settings.visible?.[id]!==false);
   renderPaceDetails();
   renderQuotaDetails();
   renderFooter();
   $('language').value=state.settings.locale??'zh-TW';
   window.QuotaI18n.localizeDocument(document,state.settings.locale);
-  window.QuotaPets.update(state);
+  window.TaskPanel.update(state,currentView==='tasks'&&!settingsOpen&&!quotaDetailsOpen);
+  document.querySelector('.panel-header .segmented')?.classList.toggle('tasks-mode-hidden',(currentView==='tasks'||currentView==='messages'));
+  window.QuotaPets.update(state);window.CompanionSettings.update(state,currentView==='messages'&&!settingsOpen&&!quotaDetailsOpen);
+  const growth=$('pet-growth');if(growth){const labels={'zh-TW':['成長','小蛋','幼幼','夥伴','星際','以週配額增量記錄經驗，每日最多 20 XP；不用刻意增加用量。'],en:['Growth','Egg','Little one','Companion','Space friend','Weekly quota increases earn XP, capped at 20 daily. No extra usage needed.'],ja:['成長','たまご','ちび','仲間','宇宙の友','週間利用枠の増加で経験値を記録。1日最大20 XP。無理に使う必要はありません。'],ko:['성장','알','아기','친구','우주 친구','주간 할당량 증가로 경험치를 기록하며 하루 최대 20 XP입니다. 추가 사용은 필요 없습니다.']}[state.settings.locale]||[];growth.replaceChildren();const role=state.settings.petCharacter==='random'?'claude':state.settings.petCharacter,g=state.petGrowth?.[role];if(g){const name=document.createElement('span');name.textContent=labels[0]+' · Lv.'+g.level+' '+labels[g.level]+' · '+g.xp+' XP';const bar=document.createElement('progress');bar.max=100;bar.value=g.progress;bar.setAttribute('aria-label',labels[0]);growth.append(name,bar);growth.title=labels[5];}}
   if(state.settings.locale==='en')$('compact-mode').textContent=state.settings.remaining?'Left':'Used';
   requestAnimationFrame(()=>{
     if(state.expanded&&!settingsOpen&&!quotaDetailsOpen&&!activeDetail&&!paceDetailsProvider){
@@ -463,11 +469,11 @@ function render(next){
         card.style.minHeight=`${quotaCardHeights[id]??98}px`;
       }
     }
-    const content=(settingsOpen?$('settings'):quotaDetailsOpen?$('quota-details'):$('cards')).getBoundingClientRect().height+document.querySelector('.context-line').getBoundingClientRect().height+(!settingsOpen&&!quotaDetailsOpen?$('add-account-area').getBoundingClientRect().height:0);
+    const content=(settingsOpen?$('settings'):quotaDetailsOpen?$('quota-details'):currentView==='tasks'?$('task-panel'):currentView==='messages'?$('messages-panel'):$('cards')).getBoundingClientRect().height+document.querySelector('.context-line').getBoundingClientRect().height+(!settingsOpen&&!quotaDetailsOpen?$('add-account-area').getBoundingClientRect().height:0);
     const chrome=document.querySelector('.panel-header').getBoundingClientRect().height+document.querySelector('footer').getBoundingClientRect().height+18;
     const height=Math.max(480,Math.ceil(content+chrome+(settingsOpen?24:12)));
     if(!window.UsageTrends.active&&!settingsOpen&&!quotaDetailsOpen&&!activeDetail&&!paceDetailsProvider&&currentView==='quota')quotaPanelHeight=height;
-    api.panelHeight(!window.UsageTrends.active&&!settingsOpen&&!quotaDetailsOpen&&!activeDetail&&!paceDetailsProvider?quotaPanelHeight:height);
+    api.panelHeight(currentView!=='tasks'&&currentView!=='messages'&&!window.UsageTrends.active&&!settingsOpen&&!quotaDetailsOpen&&!activeDetail&&!paceDetailsProvider?quotaPanelHeight:height);
   });
 }
 makeCards();
@@ -499,8 +505,8 @@ $('pace-reserve').addEventListener('input',event=>{$('pace-reserve-value').textC
 $('pace-reserve').addEventListener('change',event=>{if(paceDetailsProvider)api.settings({reservePercent:{[paceDetailsProvider]:Number(event.target.value)}});});
 $('hide').addEventListener('click',()=>api.hide());$('quit').addEventListener('click',()=>api.quit());
 $('google-source').addEventListener('change',event=>api.settings({googleSource:event.target.value}));
-for(const view of ['quota','accounts'])$(`tab-${view}`).addEventListener('click',()=>setView(view));
-document.querySelector('.view-tabs').addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const view=event.key==='Home'?'quota':event.key==='End'?'accounts':currentView==='quota'?'accounts':'quota';setView(view);$(`tab-${view}`).focus();}});
+for(const view of ['quota','accounts','tasks','messages'])$(`tab-${view}`).addEventListener('click',()=>setView(view));
+document.querySelector('.view-tabs').addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const views=['quota','accounts','tasks','messages'];const view=event.key==='Home'?'quota':event.key==='End'?'messages':views[(views.indexOf(currentView)+(event.key==='ArrowRight'?1:3))%4];setView(view);$(`tab-${view}`).focus();}});
 $('language-shortcut').addEventListener('click',()=>openFooterPopover('language'));
 $('sync-shortcut').addEventListener('click',()=>openFooterPopover('sync'));
 for(const button of $('language-popover').querySelectorAll('[data-locale]'))button.addEventListener('click',async()=>{await api.settings({locale:button.dataset.locale});closeFooterPopover(true);});
@@ -513,7 +519,7 @@ document.addEventListener('pointerdown',event=>{if(footerPopover&&!event.target.
 $('compact-refresh').addEventListener('click',()=>api.refresh());
 $('close-quota-details').addEventListener('click',()=>{quotaDetailsOpen=false;render(state);});
 $('language').addEventListener('change',event=>api.settings({locale:event.target.value}));
-for(const key of ['autoStart','alwaysOnTop','notifications'])$(key).addEventListener('change',event=>api.settings({[key]:event.target.checked}));
+for(const key of ['taskCompletionNotifications','autoStart','alwaysOnTop','notifications'])$(key).addEventListener('change',event=>api.settings({[key]:event.target.checked}));
 for(const key of ['petIdle','petAlerts','petRoam'])$(key).addEventListener('change',event=>api.settings({[key]:event.target.checked}));
 function selectedPet(){return {petPlacement:$('pet-placement').value,petBackground:$('pet-background').value,petCharacter:$('pet-character').value};}
 for(const id of ['pet-placement','pet-character','pet-background'])$(id).addEventListener('change',()=>{petDraft=selectedPet();});
@@ -524,4 +530,9 @@ $('morningHelloEnabled').addEventListener('change',event=>api.settings({morningH
 for(const input of document.querySelectorAll('[data-enable]'))input.addEventListener('change',()=>api.settings({enabled:{[input.dataset.enable]:input.checked}}));
 for(const input of document.querySelectorAll('[data-visible]'))input.addEventListener('change',()=>api.settings({visible:{[input.dataset.visible]:input.checked}}));
 document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if(footerPopover){closeFooterPopover(true);event.preventDefault();}else if(window.UsageTrends.active){window.UsageTrends.close();render(state);}else if(paceDetailsProvider){paceDetailsProvider=null;render(state);}else if(quotaDetailsOpen){quotaDetailsOpen=false;render(state);}else if(confirmLogout){confirmLogout=null;render(state);}else if(activeDetail){activeDetail=null;render(state);}else if(settingsOpen){settingsOpen=false;$('settings-toggle').setAttribute('aria-expanded','false');render(state);}else api.expand(false);});
+window.addEventListener('companion-layout-change',()=>{if(state&&(settingsOpen||currentView==='messages'))render(state);});
+window.addEventListener('task-layout-change',()=>{if(state&&currentView==='tasks')render(state);});
 api.subscribe(render);api.getState().then(render);setInterval(()=>{if(state)render(state);},15000);
+
+api.onTaskFocus(id=>{setView('tasks');requestAnimationFrame(()=>TaskPanel.focusTask(id));});
+let bubbleAnchorFrame=0;function reportBubbleAnchor(){cancelAnimationFrame(bubbleAnchorFrame);bubbleAnchorFrame=requestAnimationFrame(()=>{const anchors={};for(const [provider,id] of [['codex','codex'],['claude','claude'],['antigravity','gemini']]){const node=document.getElementById('mini-'+id);if(node&&node.getBoundingClientRect().width){const r=node.getBoundingClientRect();anchors[provider]=r.x+r.width/2;}}void api.taskBubbleAnchor(anchors);});}new ResizeObserver(reportBubbleAnchor).observe(document.body);new MutationObserver(reportBubbleAnchor).observe(document.querySelector('.compact-providers')||document.querySelector('.compact-bar')||document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','class']});

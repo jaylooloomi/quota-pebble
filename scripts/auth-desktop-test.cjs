@@ -15,6 +15,18 @@ const os = require('node:os');
     // No misleading official-page link before an account has been connected.
     assert.equal(await page.locator('.card.claude .provider-link').isVisible(),false);
     await page.locator('.card.claude .connect-primary').click();
+    await page.locator('.card.claude .continue-claude-login').waitFor({state:'visible'});
+    await page.locator('.card.claude .close-connection').click();await page.locator('#tab-accounts').click();
+    assert.equal(await page.locator('.card.claude .account-switch').isEnabled(),true,'pending web login must remain reachable');
+    assert.notEqual(await page.locator('.card.claude .account-switch').evaluate(e=>getComputedStyle(e).cursor),'wait','waiting for a person is not a busy cursor');
+    for(const locale of ['zh-TW','en','ja','ko']){await page.evaluate(locale=>quota.settings({locale}),locale);assert.equal(await page.locator('.card.claude .account-switch').isEnabled(),true);assert.equal(await page.locator('.card.claude .account-actions').evaluate(e=>e.scrollWidth<=e.clientWidth+1),true,locale+' pending actions fit');}
+    await page.evaluate(()=>quota.settings({locale:'zh-TW'}));
+    await fs.mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/pending-login-account.png'});
+    const openedBefore=await application.evaluate(()=>globalThis.__AUTH_TEST_URLS.length);
+    await page.locator('.card.claude .account-switch').click();
+    await page.locator('.card.claude .continue-claude-login').waitFor({state:'visible'});
+    assert.equal(await application.evaluate(()=>globalThis.__AUTH_TEST_URLS.length),openedBefore,'reopen progress without another browser tab');
+    await page.locator('#tab-quota').click();await page.locator('.card.claude .connect-primary').click();
     await page.locator('.card.claude .continue-claude-login').click();
     await page.locator('.card.claude .auth-code-form').waitFor({state:'visible'});
     await page.locator('.card.claude .cancel-login').click();
@@ -81,7 +93,7 @@ const os = require('node:os');
     const loggedOut=await page.evaluate(()=>window.quota.getState());
     assert.deepEqual(loggedOut.providers.gemini,afterSwitch.providers.gemini);
     assert.equal(await page.locator('.card.gemini .account-logout').isVisible(),false);
-    const report={passed:true,checks:['Codex opens its own OpenAI login and switches quota automatically','Codex account switch preserves Claude and Gemini state','Claude manual authorization code returns through CLI stdin','Google real loopback callback and encrypted vault','wrong OAuth state rejected','auth completion bypasses stale auth backoff','quota cards update without refresh click','app restores and expands after browser authorization','no misleading external sign-in link','authorization code input cleared']};
+    const report={passed:true,checks:['Pending web login remains reachable after closing details and switching tabs','Progress reentry does not open duplicate authorization tabs','Four-language pending account actions fit and never show a busy cursor','Codex opens its own OpenAI login and switches quota automatically','Codex account switch preserves Claude and Gemini state','Claude manual authorization code returns through CLI stdin','Google real loopback callback and encrypted vault','wrong OAuth state rejected','auth completion bypasses stale auth backoff','quota cards update without refresh click','app restores and expands after browser authorization','no misleading external sign-in link','authorization code input cleared']};
     await fs.mkdir('test-results',{recursive:true}); await fs.writeFile('test-results/auth-desktop.json',JSON.stringify(report,null,2)); console.log(JSON.stringify(report,null,2));
   } finally {await application.close();await fs.rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

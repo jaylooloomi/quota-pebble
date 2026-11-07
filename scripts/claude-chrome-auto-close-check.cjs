@@ -1,0 +1,7 @@
+const {ClaudeChromeLogin}=require('../dist/claude-chrome-login'),{ClaudeWebQuota}=require('../dist/claude-web-quota'),path=require('node:path'),fs=require('node:fs/promises');
+if(!process.argv.includes('--live'))throw Error('Explicit --live required');
+(async()=>{const directory=path.join(process.env.APPDATA,'quota-pebble-chrome-validation','api-probe','chrome-login'),chrome=new ClaudeChromeLogin(directory);let timer;try{
+ await chrome.start();await Promise.race([chrome.waitForLogin(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Automatic close was not detected within 45 seconds')),45000);})]);clearTimeout(timer);
+ const source=new ClaudeWebQuota(chrome.fetch.bind(chrome)),orgs=await source.organizations();const cookies=await chrome.capture(),active=cookies.cookies.find(c=>c.name==='lastActiveOrg')?.value;const org=orgs.find(o=>o.id===active)??(orgs.length===1?orgs[0]:null);if(!org)throw Error('Organization not confirmed');
+ const reading=await source.read(org.id),report={passed:true,automaticClose:true,windows:reading.windows};await fs.writeFile('test-results/claude-chrome-auto-close-live.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
+ }finally{clearTimeout(timer);await chrome.close(false);}})().catch(error=>{console.log(JSON.stringify({passed:false,message:error.code?error.message:'Automatic close validation failed'}));process.exitCode=1;});

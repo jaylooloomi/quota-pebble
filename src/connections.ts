@@ -3,16 +3,16 @@ import { Poller } from './poller';
 import { LoginProgress } from './claude-login';
 export interface ConnectionState {
   pending: boolean; phase: 'web_login' | 'authorizing' | 'connecting' | 'code' | 'verifying' | 'syncing' | 'cooldown' | 'waiting' | 'ready' | 'error'; message: string;
-  codeRequired?: boolean; canReopen?: boolean;
+  codeRequired?: boolean; canReopen?: boolean; automatic?:boolean;
 }
 export class Connections {
   states: Partial<Record<ProviderId, ConnectionState>> = {};
   private urls = new Map<ProviderId, string>();
-  constructor(private service: { login(id: ProviderId, open: (url: string) => Promise<void>, progress: (value: LoginProgress) => void): Promise<void>; submitCode(id: ProviderId, code: unknown): void },
+  constructor(private service: { usesClaudeWeb?:boolean;prepareClaudeWeb?():Promise<boolean>;reopenClaudeWeb?():void;waitClaudeWeb?():Promise<void>|undefined;cancelLogin?(id:ProviderId):void;login(id: ProviderId, open: (url: string) => Promise<void>, progress: (value: LoginProgress) => void): Promise<void>; submitCode(id: ProviderId, code: unknown): void },
     private poller: Poller, private open: (url: string) => Promise<void>, private changed: () => void, private focus: () => void) {}
-  async prepareClaude(){if(this.states.claude?.pending)return;this.states.claude={pending:true,phase:'web_login',canReopen:true,message:'先在 Claude 網頁登入要監控的帳號，再按「已登入正確帳號，繼續授權」。'};this.urls.set('claude','https://claude.ai/new');this.changed();try{await this.open('https://claude.ai/new');}catch{this.cancelPreparation();}}
+  async prepareClaude(){if(this.states.claude?.pending){this.service.reopenClaudeWeb?.();return;}this.states.claude={pending:true,phase:'web_login',canReopen:true,automatic:!!this.service.usesClaudeWeb,message:this.service.usesClaudeWeb?'請在 Chrome 登入 Claude；完成後會自動關閉專用視窗並同步配額。若未自動關閉，可手動關窗。':'先在 Claude 網頁登入要監控的帳號，再按「已登入正確帳號，繼續授權」。'};this.changed();try{if(this.service.usesClaudeWeb){await this.service.prepareClaudeWeb?.();const preparation=this.states.claude;void this.service.waitClaudeWeb?.()?.then(()=>{if(this.states.claude===preparation&&preparation?.phase==='web_login')return this.continueClaude();}).catch(error=>{if(this.states.claude!==preparation||preparation?.phase!=='web_login')return;this.states.claude={pending:false,phase:'error',message:error instanceof ProviderError?error.message:'Chrome 登入未完成，請重試'};this.changed();});return;}this.urls.set('claude','https://claude.ai/new');await this.open('https://claude.ai/new');}catch(error){this.service.cancelLogin?.('claude');this.states.claude={pending:false,phase:'error',message:error instanceof ProviderError?error.message:'Chrome 登入未完成，請重試'};this.changed();}}
   continueClaude(){if(this.states.claude?.phase!=='web_login')return;this.states.claude.pending=false;return this.login('claude');}
-  cancelPreparation(){if(this.states.claude?.phase!=='web_login')return false;delete this.states.claude;this.urls.delete('claude');this.changed();return true;}
+  cancelPreparation(){if(this.states.claude?.phase!=='web_login')return false;if(this.service.usesClaudeWeb)this.service.cancelLogin?.('claude');delete this.states.claude;this.urls.delete('claude');this.changed();return true;}
   async login(id: ProviderId) {
     if (this.states[id]?.pending) return;
     this.states[id] = { pending: true, phase: 'authorizing', message: '等待瀏覽器授權，完成後會自動同步配額…' };
@@ -41,7 +41,7 @@ export class Connections {
       this.focus();
     } finally { this.urls.delete(id); this.changed(); }
   }
-  async reopen(id: ProviderId) { const url = this.urls.get(id); if (url && this.states[id]?.pending) await this.open(url); }
+  async reopen(id: ProviderId) {if(id==='claude'&&this.service.usesClaudeWeb){this.service.reopenClaudeWeb?.();return;}const url = this.urls.get(id); if (url && this.states[id]?.pending) await this.open(url); }
   submitCode(id: ProviderId, code: unknown) {
     try { this.service.submitCode(id, code); const s = this.states[id]; if (s) { s.codeRequired = false; s.phase = 'verifying'; s.message = '正在驗證授權碼，最多等待 60 秒；可取消後重新登入。'; } }
     catch (e) { const s = this.states[id]; if (s) s.message = e instanceof ProviderError ? e.message : '授權碼無法送出'; }

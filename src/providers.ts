@@ -12,6 +12,7 @@ import { ClaudeLogin, LoginProgress } from './claude-login';
 import { Antigravity } from './antigravity';
 import { ProviderError, ProviderId, parseClaude, parseCodex, parseGemini, Reading } from './model';
 import {sendClaudeHello} from './hello-command';
+import type {ClaudeWebSession} from './claude-web-session';
 const exec = promisify(execFile);
 export class Providers {
   rpc = new CodexRpc(() => findCli('codex'));
@@ -21,9 +22,13 @@ export class Providers {
   beginAntigravitySwitch(){this.antigravity.beginSwitch();}
   cancelAntigravitySwitch(){this.antigravity.cancelSwitch();}
   get waitingForAntigravityAccount(){return this.antigravity.waitingForAccount;}
-  constructor(private gemini: Gemini, private googleSource: () => 'antigravity' | 'code_assist' = () => 'code_assist', private claudeConfigDir?:string) {
+  constructor(private gemini: Gemini, private googleSource: () => 'antigravity' | 'code_assist' = () => 'code_assist', private claudeConfigDir?:string, private claudeWeb?:ClaudeWebSession) {
     if(claudeConfigDir)this.claudeLogin=new ClaudeLogin(()=>this.claudeCommand());
   }
+  get usesClaudeWeb(){return !!this.claudeWeb;}
+  async prepareClaudeWeb(){if(!this.claudeWeb)return false;await this.claudeWeb.prepare();return true;}
+  reopenClaudeWeb(){this.claudeWeb?.reopen();}
+  waitClaudeWeb(){return this.claudeWeb?.waitForChromeLogin?.();}
   private claudeCommand(){
     const command=findCli('claude');if(!this.claudeConfigDir)return command;
     const env={...command.env,CLAUDE_CONFIG_DIR:this.claudeConfigDir};
@@ -41,6 +46,7 @@ export class Providers {
     if (id === 'gemini') {
       return this.googleSource() === 'antigravity' ? this.antigravity.read() : this.gemini.read();
     }
+    if(this.claudeWeb)return this.claudeWeb.read();
     const dir = this.claudeConfigDir || process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude');
     let credentials: any;
     try { credentials = JSON.parse(await readFile(path.join(dir, '.credentials.json'), 'utf8')); } catch { /* Keychain fallback below */ }
@@ -53,6 +59,9 @@ export class Providers {
     }
     const oauth = credentials?.claudeAiOauth;
     if (!oauth?.accessToken) throw new ProviderError('auth', '請先登入 Claude Code，以讀取訂閱配額');
+    // The usage endpoint can report stale credentials as 429 rather than 401.
+    // Never spend its rate-limit budget on a token known to have expired.
+    if(typeof oauth.expiresAt==='number'&&Number.isFinite(oauth.expiresAt)&&oauth.expiresAt<=Date.now())throw new ProviderError('auth','Claude 授權已過期，請重新登入');
     let identity=oauth.accessToken;try{const config=JSON.parse(await readFile(this.claudeConfigDir||process.env.CLAUDE_CONFIG_DIR?path.join(dir,'.claude.json'):path.join(homedir(),'.claude.json'),'utf8'));identity=config.oauthAccount?.accountUuid||identity;}catch{}
     const data = await jsonRequest('https://api.anthropic.com/api/oauth/usage', {
       Authorization: `Bearer ${oauth.accessToken}`, Accept: 'application/json', 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': 'quota-island/0.1.0'
@@ -94,6 +103,7 @@ export class Providers {
       });
       return;
     }
+    if(this.claudeWeb){progress({connecting:true,message:'正在驗證 Claude 網頁帳號與配額…'});await this.claudeWeb.login();return;}
     const configDir=this.claudeConfigDir||process.env.CLAUDE_CONFIG_DIR||path.join(homedir(),'.claude'),credentialFile=path.join(configDir,'.credentials.json');
     const before=await stat(credentialFile).then(s=>s.mtimeMs).catch(()=>0);
     try{await this.claudeLogin.start(info => {
@@ -102,11 +112,12 @@ export class Providers {
     },300000,async()=>{const stamp=await stat(credentialFile).then(s=>s.mtimeMs).catch(()=>0);if(stamp<=before)return false;const cmd=this.claudeCommand();const r=await exec(cmd.file,[...cmd.args,'auth','status','--json'],{env:cmd.env,windowsHide:true,timeout:10000,maxBuffer:65536});return JSON.parse(r.stdout).loggedIn===true;});}catch(error){const after=await stat(credentialFile).then(s=>s.mtimeMs).catch(()=>0);let verified=false;if(after>before){try{const cmd=this.claudeCommand();const result=await exec(cmd.file,[...cmd.args,'auth','status','--json'],{env:cmd.env,windowsHide:true,timeout:15000,maxBuffer:65536});verified=JSON.parse(result.stdout).loggedIn===true;}catch{}}if(!verified)throw error;}
   }
   submitCode(id: ProviderId, code: unknown) { if (id !== 'claude') throw new ProviderError('auth', '此來源不接受授權碼'); this.claudeLogin.submitCode(code); }
-  cancelLogin(id: ProviderId) { if (id === 'claude') this.claudeLogin.close(); }
+  cancelLogin(id: ProviderId) { if (id === 'claude'){this.claudeLogin.close();this.claudeWeb?.cancel();} }
   async logout(id: ProviderId) {
     if (this.authJobs.has(id)) throw new ProviderError('auth','請先取消或完成目前的登入');
     if (id === 'codex') { await this.rpc.call('account/logout'); return; }
     if (id === 'claude') {
+      if(this.claudeWeb){await this.claudeWeb.logout();return;}
       const command=this.claudeCommand();
       try { await exec(command.file,[...command.args,'auth','logout'],{env:command.env,windowsHide:true,timeout:15_000,maxBuffer:128*1024}); }
       catch { throw new ProviderError('auth','登出未完成，請稍後重試'); }
@@ -114,5 +125,5 @@ export class Providers {
     }
     throw new ProviderError('auth','請在 Antigravity 或 Google 帳號中管理授權');
   }
-  close() { this.rpc.close(); this.gemini.close(); this.claudeLogin.close(); }
+  close() { this.rpc.close(); this.gemini.close(); this.claudeLogin.close(); this.claudeWeb?.close(); }
 }

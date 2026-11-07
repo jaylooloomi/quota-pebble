@@ -38,7 +38,29 @@ and encrypted credential storage using `google-auth-library` and Electron
 - Electron: MIT; Chromium and other notices are included in the distribution's
   `LICENSE` and `LICENSES.chromium.html`.
 - google-auth-library: Apache-2.0; https://github.com/googleapis/google-auth-library-nodejs
+- ws: MIT; Copyright Einar Otto Stangvik, Arnout Kazemier and contributors,
+  Luigi Pinca and contributors. The dependency and its LICENSE are bundled.
+  https://github.com/websockets/ws
 - Dependency versions and transitive dependencies are recorded in `package-lock.json`.
 
 QuotaDeck, AI Quota Deck and QuotaPulse were researched as references. Their
 implementation code and assets are not included in this application.
+
+Ocelin (https://github.com/m-sanchez/ocelin, MIT) was studied as a design
+reference for bounded local-session reads and lifecycle reconciliation. The
+Quota Pebble metadata-only collector is independently implemented; Ocelin's
+runtime, UI, conversation preview and assets are not bundled.
+
+lucianlamp/codex-monitor (https://github.com/lucianlamp/codex-monitor, MIT)
+was studied as a reference for the Remote Control challenge/proof protocol.
+Pebble's Windows CNG helper and read-only transport are independently implemented;
+the upstream executable and the official Desktop App native binaries are not bundled.
+
+cctop (https://github.com/tomstagl/cctop, MIT) and
+antigravity-trajectory-extractor
+(https://github.com/jijiamoer/antigravity-trajectory-extractor, MIT) were studied
+as references for native registry metadata and local RPC discovery. Pebble's
+read-only collectors are independently implemented. Their runtimes, Hook
+integrations, transcript exporters and assets are not bundled.
+
+fast-xml-parser (https://github.com/NaturalIntelligence/fast-xml-parser), MIT, is bundled for bounded RSS/Atom parsing. Its license and those of its production dependencies are retained in node_modules inside the package.

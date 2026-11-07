@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" viewBox="0 0 720 300">
+  <rect width="720" height="300" rx="20" fill="#16191d"/>
+  <text x="32" y="42" fill="#eef1f4" font-size="21" font-family="Segoe UI,Microsoft JhengHei,sans-serif" font-weight="600">任務摘要 · 今日／三日</text>
+  <text x="32" y="70" fill="#9fa8b4" font-size="14" font-family="Segoe UI,Microsoft JhengHei,sans-serif">僅移除右上方「8h」；維持固定尺寸與左右分區</text>
+  <rect x="32" y="92" width="656" height="166" rx="28" fill="#101313" stroke="#343b40"/>
+  <g transform="translate(68 112) scale(3.5)" font-family="Segoe UI,Microsoft JhengHei,sans-serif">
+    <text x="13.5" y="19" text-anchor="middle" fill="#9ce7cf" font-size="19" font-weight="750">1*</text>
+    <text x="13.5" y="31" text-anchor="middle" fill="#c3c9cf" font-size="7">執行中</text>
+    <path d="M29 4 V31" stroke="#ffffff" stroke-opacity=".16" stroke-width=".3"/>
+    <text x="33" y="13" fill="#b6bdc7" font-size="8">今日 1*</text>
+    <text x="33" y="27" fill="#d7dce2" font-size="8">三日 13*</text>
+  </g>
+  <text x="410" y="153" fill="#aab3bd" font-size="15" font-family="Segoe UI,Microsoft JhengHei,sans-serif">左側：執行數＋狀態</text>
+  <text x="410" y="184" fill="#aab3bd" font-size="15" font-family="Segoe UI,Microsoft JhengHei,sans-serif">右側：今日／三日，靠左對齊</text>
+  <text x="32" y="283" fill="#87919d" font-size="12" font-family="Segoe UI,Microsoft JhengHei,sans-serif">放大預覽 · 示意數字 · 尚未套用至 App</text>
+</svg>

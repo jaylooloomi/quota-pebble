@@ -25,14 +25,14 @@ export class Accounts {
     const dir=this.directory(profile.id);mkdirSync(dir,{recursive:true,mode:0o700});
     const service=this.factory(dir);
     const poller=new Poller(id=>service.read(id),()=>{if(this.entries.has(profile.id)){this.save();this.changed();}},Date.now,(_id,reading,time)=>this.observed?.(profile.id,reading,time));
-    if(service instanceof Providers)poller.setMinimumInterval('claude',600000);
+    if(service instanceof Providers)poller.setMinimumInterval('claude',service.usesClaudeWeb?900000:600000);
     poller.states.codex.enabled=false;poller.states.gemini.enabled=false;poller.states.claude.enabled=profile.enabled;
-    poller.restoreRateLimits(profile.limits);
+    const limits:any=profile.limits;if(service instanceof Providers&&service.usesClaudeWeb&&limits?.claude?.source!=='claude-web-v1')poller.restoreRateLimits({});else poller.restoreRateLimits(limits);
     const connections=new Connections(service,poller,this.open,()=>{if(this.entries.has(profile.id))this.changed();},this.focus);
     this.entries.set(profile.id,{profile,service,poller,connections,removed:false});
   }
   private save(){
-    const profiles=[...this.entries.values()].map(e=>({...e.profile,reserveDefaultsVersion:3,limits:e.poller.rateLimits()}));
+    const profiles=[...this.entries.values()].map(e=>{const limits:any=e.poller.rateLimits();if(limits.claude&&e.service instanceof Providers&&e.service.usesClaudeWeb)limits.claude.source='claude-web-v1';return{...e.profile,reserveDefaultsVersion:3,limits};});
     writeFileSync(this.file+'.tmp',JSON.stringify(profiles),{mode:0o600});renameSync(this.file+'.tmp',this.file);
   }
   has(id:unknown):id is string{return typeof id==='string'&&this.entries.has(id);}

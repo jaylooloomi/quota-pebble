@@ -17,7 +17,7 @@ Prompt set: preserve supplied character identities; polished3D, transparent back
 Unit tests cover random scheduling, action duration, feeding priority, both edge targets and returning without teleportation. Desktop tests cover16 role/action combinations, actual sprite rendering, feed arrival, eating, return to walking, replacing targets, close cleanup, and renderer errors. Existing resident, four-language and style tests remain applicable.
 
 ## Deferred TODO: message receiver and bubbles
-Not implemented in this release. Future module should accept RSS/Atom polling or local messages, normalize them into a bounded queue (title/body/source/time), and display plain-text bubbles above the current companion. Feed interaction and real quota alerts should take priority. Add source management, pause/mute, preview, duplicate suppression and a reading duration limit. No execution of received text. Keep the quota strip geometry fixed and measure bubble height inside the existing stage.
+Implemented in v1.29.0 as a bounded RSS/Atom receiver with source controls, persistent deduplication, mute, preview and an external no-focus plain-text bubble. See [current specification](companion-growth-and-messages.md). General external push/local IPC message ingestion remains out of scope; no private receiver server is started.
 
 ## Selectable stage backgrounds (1.8.1)
 Settings → Stage background offers Meteor forest (default), Vivid nebula, and Classic night. Validated choices persist across restart. All backgrounds use the same112px stage and do not change quota or actor positions.
