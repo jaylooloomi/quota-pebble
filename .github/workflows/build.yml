@@ -1,29 +1,58 @@
 name: Desktop checks and packages
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   build:
+    name: build (${{ matrix.os }}, ${{ matrix.command }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             command: dist:win
+            package_args: --win portable
           - os: macos-latest
             command: dist:mac
+            package_args: --mac zip
           - os: ubuntu-latest
             command: dist:linux
+            package_args: --linux AppImage
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Decide whether to package
+        id: package
+        shell: bash
+        run: |
+          enabled=false
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$GITHUB_REF" == refs/tags/v* ]]; then
+            enabled=true
+          elif [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            # The first parent of GitHub's PR merge commit is the base revision.
+            packaging_changes=$(git diff --name-only HEAD^1 HEAD -- \
+              package.json package-lock.json tsconfig.json build/ src/native/ \
+              scripts/copy-ui.cjs .github/workflows/)
+            if [[ -n "$packaging_changes" ]]; then
+              enabled=true
+            fi
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run test:coverage
+      - run: npm run build
+      - run: node scripts/test-coverage.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -31,9 +60,9 @@ jobs:
           path: test-results/coverage.txt
       - run: npm audit --omit=dev
       - if: runner.os == 'Linux'
-        run: xvfb-run -a npm run test:desktop
+        run: xvfb-run -a node scripts/desktop-test.cjs
       - if: runner.os == 'Windows'
-        run: npm run test:desktop
+        run: node scripts/desktop-test.cjs
       - if: runner.os == 'Windows'
         run: node scripts/usage-trends-test.cjs
         env:
@@ -41,21 +70,23 @@ jobs:
       - if: runner.os == 'Windows'
         run: node scripts/fresh-install-defaults-test.cjs
       - if: runner.os == 'Windows'
-        run: npm run test:auth
+        run: node scripts/auth-desktop-test.cjs
       - if: runner.os == 'Windows'
-        run: npm run test:order
+        run: node scripts/order-test.cjs
       - if: runner.os == 'Windows'
-        run: npm run test:design
+        run: node scripts/design-test.cjs
       - if: runner.os == 'Windows'
-        run: npm run test:i18n
+        run: node scripts/i18n-test.cjs
         env:
           # Hosted Windows displays can be 768px tall; keep the full settings view testable.
           QUOTA_TEST_SCALE: '0.75'
           QUOTA_TEST_WORKAREA_HEIGHT: '900'
-      - run: npm run ${{ matrix.command }} -- --publish never
+      - if: steps.package.outputs.enabled == 'true'
+        run: npx --no-install electron-builder ${{ matrix.package_args }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
+        if: steps.package.outputs.enabled == 'true'
         with:
           name: quota-island-${{ runner.os }}
           path: |
