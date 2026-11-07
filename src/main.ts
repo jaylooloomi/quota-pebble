@@ -1,6 +1,15 @@
+import {taskSourceDiagnostics} from './task-source-diagnostics';
+import {ClaudeWebSession} from './claude-web-session';
+import {PetMessages} from './pet-messages';
+import {PetMessageWindow} from './pet-message-window';
+import {PetGrowth} from './pet-growth';
+import {CombinedTaskMonitor as TaskMonitor} from './combined-task-monitor';
+import {TaskBubble} from './task-bubble';
+import {IdleTracker} from './task-idle';
+import {TaskPeak} from './task-peak';
 import {UsageHistory} from './usage-history';
 import {AutoReconnect} from './auto-reconnect';
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray, globalShortcut, powerMonitor, Notification, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray, globalShortcut, powerMonitor, Notification, safeStorage, clipboard } from 'electron';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import {syncLoginStartup} from './login-startup';
@@ -26,8 +35,8 @@ if (testing) {
   app.setPath('userData', testData);
 }
 const petBackgrounds = ["meteor","meteor-day","cloud-day","cloud-night","sakura-day","sakura-night","coast-day","coast-night","snow-day","snow-night","greenhouse-day","greenhouse-night"] as const;
-type Settings = { petCharacter:'claude'|'codex'|'gemini'|'octopus'|'random'; petPlacement:'stage'|'title'; autoStart:boolean; petBackground:typeof petBackgrounds[number]; petRoam:boolean; petStyle:'smooth'; petIdle:boolean;petAlerts:boolean; morningHelloEnabled:boolean; morningHelloTime:string; locale: 'zh-TW' | 'en' | 'ja' | 'ko'; remaining: boolean; pacing: boolean; reserveDefaultsVersion:3; reservePercent: Record<ProviderId, number>; paceWindows: Partial<Record<ProviderId, string>>; alwaysOnTop: boolean; notifications: boolean; visible: Record<ProviderId, boolean>; enabled: Record<ProviderId, boolean>; order: string[]; googleSource: 'antigravity' | 'code_assist'; presentationVersion:2; dock?:Dock; x?: number; y?: number };
-let settings: Settings = { petCharacter:'claude', petPlacement:'stage', autoStart:true, petBackground:'meteor', petRoam:!demo, petStyle:'smooth', petIdle:!demo,petAlerts:!demo, morningHelloEnabled:true, morningHelloTime:'08:00', locale:'zh-TW', remaining: true, pacing:false, reserveDefaultsVersion:3, reservePercent:{claude:10,codex:10,gemini:10}, paceWindows:{}, alwaysOnTop: true, notifications: true, visible: { claude:true, codex:true, gemini:true }, enabled: { claude: true, gemini: true, codex: true }, order: ['claude','codex','gemini'], googleSource:'antigravity', presentationVersion:2 };
+type Settings = { taskCompletionNotifications:boolean; compactTaskSummary:boolean; petCharacter:'claude'|'codex'|'gemini'|'octopus'|'random'; petPlacement:'stage'|'title'; autoStart:boolean; petBackground:typeof petBackgrounds[number]; petRoam:boolean; petStyle:'smooth'; petIdle:boolean;petAlerts:boolean; morningHelloEnabled:boolean; morningHelloTime:string; locale: 'zh-TW' | 'en' | 'ja' | 'ko'; remaining: boolean; pacing: boolean; reserveDefaultsVersion:3; reservePercent: Record<ProviderId, number>; paceWindows: Partial<Record<ProviderId, string>>; alwaysOnTop: boolean; notifications: boolean; visible: Record<ProviderId, boolean>; enabled: Record<ProviderId, boolean>; order: string[]; googleSource: 'antigravity' | 'code_assist'; presentationVersion:2; dock?:Dock; x?: number; y?: number };
+let settings: Settings = { taskCompletionNotifications:true, compactTaskSummary:true, petCharacter:'claude', petPlacement:'stage', autoStart:true, petBackground:'meteor', petRoam:!demo, petStyle:'smooth', petIdle:!demo,petAlerts:!demo, morningHelloEnabled:true, morningHelloTime:'08:00', locale:'zh-TW', remaining: true, pacing:false, reserveDefaultsVersion:3, reservePercent:{claude:10,codex:10,gemini:10}, paceWindows:{}, alwaysOnTop: true, notifications: true, visible: { claude:true, codex:true, gemini:true }, enabled: { claude: true, gemini: true, codex: true }, order: ['claude','codex','gemini'], googleSource:'antigravity', presentationVersion:2 };
 function validOrder(raw: unknown): raw is string[] {
   return Array.isArray(raw) && raw.length >= 3 && raw.length <= 23 && new Set(raw).size === raw.length && providerIds.every(id=>raw.includes(id)) && raw.every(id => providerIds.includes(id) || (typeof id === 'string' && /^claude-account-[0-9a-f-]{36}$/.test(id)));
 }
@@ -40,7 +49,8 @@ let quitting = false;
 let paused = false;
 let providers: Providers;
 let poller: Poller;
-let usageHistory:UsageHistory;
+let usageHistory:UsageHistory;let petGrowth:PetGrowth;let petMessages:PetMessages;let petMessageWindow:PetMessageWindow;
+let taskMonitor:TaskMonitor;let taskBubble:TaskBubble;const idleTracker=new IdleTracker();let taskPeak:TaskPeak;
 let interval: NodeJS.Timeout;
 let connections: Connections;
 let credentialWatch: CredentialWatch;
@@ -48,7 +58,8 @@ const warned = new Map<string, string>();
 let savedRateLimits='';
 function persistRateLimits(){
   if(!poller||demo)return;
-  const serialized=JSON.stringify(poller.rateLimits());if(serialized===savedRateLimits)return;
+  const limits:any=poller.rateLimits();if(limits.claude&&providers?.usesClaudeWeb)limits.claude.source='claude-web-v1';
+  const serialized=JSON.stringify(limits);if(serialized===savedRateLimits)return;
   try{const file=path.join(app.getPath('userData'),'provider-cooldowns.json');mkdirSync(app.getPath('userData'),{recursive:true});writeFileSync(file+'.tmp',serialized,{mode:0o600});renameSync(file+'.tmp',file);savedRateLimits=serialized;}catch{/* A cache write must never stop quota updates. */}
 }
 function saveSettings() {
@@ -75,7 +86,7 @@ function readSettings() {
     for(const id of providerIds){if(typeof s.reservePercent?.[id]==='number'&&Number.isFinite(s.reservePercent[id])&&s.reservePercent[id]>=0&&s.reservePercent[id]<=100)settings.reservePercent[id]=s.reserveDefaultsVersion===2&&s.reservePercent[id]===5?10:s.reservePercent[id];if(typeof s.paceWindows?.[id]==='string'&&s.paceWindows[id].length<=160)settings.paceWindows[id]=s.paceWindows[id];}
     for (const id of providerIds) if (typeof s.visible?.[id] === 'boolean') settings.visible[id] = s.visible[id];
     if (s.googleSource === 'antigravity' || s.googleSource === 'code_assist') settings.googleSource=s.googleSource;
-    for (const key of ['autoStart','remaining', 'pacing', 'alwaysOnTop', 'notifications','petIdle','petAlerts','petRoam'] as const) if (typeof s[key] === 'boolean' && (key!=='remaining'||s.presentationVersion===2)) settings[key] = s[key];
+    for (const key of ['taskCompletionNotifications','autoStart','remaining', 'pacing', 'alwaysOnTop', 'notifications','petIdle','petAlerts','petRoam'] as const) if (typeof s[key] === 'boolean' && (key!=='remaining'||s.presentationVersion===2)) settings[key] = s[key];
     for (const id of providerIds) if (typeof s.enabled?.[id] === 'boolean') settings.enabled[id] = s.enabled[id];
     if (Number.isFinite(s.x) && Number.isFinite(s.y)) { settings.x = s.x; settings.y = s.y; }
   } catch { /* First run or invalid preferences: use defaults. */ }
@@ -84,9 +95,12 @@ let accounts:Accounts;
 let autoReconnect:AutoReconnect|undefined;
 let diagnostics:Diagnostics|undefined;
 let morningHello:MorningHello|undefined;
-function snapshot() { const extra=accounts?.snapshot();return { providers: {...poller.states,...extra?.providers}, settings:{...settings,order:[...settings.order.filter(id=>providerIds.includes(id as ProviderId)||accounts?.has(id)),...(extra?.accounts??[]).map(a=>a.id).filter(id=>!settings.order.includes(id))],enabled:{...settings.enabled,...extra?.enabled},visible:{...settings.visible,...extra?.visible},reservePercent:{...settings.reservePercent,...extra?.reservePercent},paceWindows:{...settings.paceWindows,...extra?.paceWindows}}, morningHello:morningHello?.snapshot()??{}, accounts:extra?.accounts??[], auth:{...connections?.states,...extra?.auth}, expanded, paused, demo, version: app.getVersion(), platform: process.platform }; }
+function snapshot() { const extra=accounts?.snapshot();return { providers: {...poller.states,...extra?.providers}, settings:{...settings,order:[...settings.order.filter(id=>providerIds.includes(id as ProviderId)||accounts?.has(id)),...(extra?.accounts??[]).map(a=>a.id).filter(id=>!settings.order.includes(id))],enabled:{...settings.enabled,...extra?.enabled},visible:{...settings.visible,...extra?.visible},reservePercent:{...settings.reservePercent,...extra?.reservePercent},paceWindows:{...settings.paceWindows,...extra?.paceWindows}}, tasks:taskMonitor?{...taskMonitor.snapshot(),peak:taskPeak?.snapshot()}:undefined, petMessages:petMessages?.snapshot(), petGrowth:petGrowth?.snapshot(), morningHello:morningHello?.snapshot()??{}, accounts:extra?.accounts??[], auth:{...connections?.states,...extra?.auth}, expanded, paused, demo, claudeQuotaSource:providers?.usesClaudeWeb?'web':'oauth', version: app.getVersion(), platform: process.platform }; }
 function publish() {
   persistRateLimits();
+  if(taskMonitor)taskPeak?.observe(taskMonitor.snapshot(),!paused);
+  if(taskMonitor)for(const notice of idleTracker.observe(taskMonitor.snapshot().rows,settings.taskCompletionNotifications&&!paused)){diagnostics?.taskNotice('idle',notice.provider,'eligible');taskBubble?.enqueue(notice);}
+  if(taskMonitor)diagnostics?.taskMonitor(taskMonitor.snapshot(),idleTracker.diagnostics(),{enabled:settings.taskCompletionNotifications,paused,visible:!!win?.isVisible()});
   if(poller){const snap=snapshot();diagnostics?.observe(snap);for(const [id,s] of Object.entries(snap.providers) as [string,ProviderState][])if(snap.paused||((snap.auth as any)?.[id]?.pending&&(snap.auth as any)[id].phase!=='syncing')||!s.enabled||['stale','unavailable','signed_out'].includes(s.status))usageHistory?.gap(id);}
   if (!win?.isDestroyed() && !win?.webContents.isDestroyed()) win?.webContents.send('state', snapshot());
   if (settings.notifications && !demo && !testing && Notification.isSupported()) {
@@ -151,6 +165,12 @@ function installHandlers() {
   // Only our trusted local renderer may call IPC. No arbitrary URLs, commands or paths.
   for (const [channel, handler] of Object.entries({
     'get-state': () => snapshot(),
+    'pet-feed-configure':(_event:any,action:unknown,value:unknown)=>{try{petMessages.configure(action,value);return{ok:true};}catch{return{ok:false};}},
+    'pet-message-preview':()=>petMessages.preview(),
+    'pet-message-present':(_event:any,id:unknown,anchor:unknown)=>{if(typeof anchor!=='number'||!Number.isFinite(anchor))return;const message=petMessages.snapshot().items[0];petMessageWindow.show(message&&message.id===id?message:null,Math.max(0,Math.min(464,anchor)),expanded||paused||taskBubble.isVisible);},
+    'task-bubble-anchor':(_event:any,x:unknown)=>taskBubble?.setAnchor(x),
+    'tasks-start':async()=>{await taskMonitor.refresh();return taskMonitor.snapshot();},
+    'task-diagnostics-copy':async()=>{await clipboard.writeText(JSON.stringify(taskSourceDiagnostics(taskMonitor.snapshot(),app.getVersion(),require('node:os').hostname()),null,2));return{ok:true};},
     'history-query': (_event:any,id:unknown,window:unknown,days:unknown)=>{if(typeof id!=='string'||!providerIds.includes(id as ProviderId)&&!accounts.has(id))throw new Error('Unknown account');return usageHistory.query(id,window,days);},
     'history-clear':()=>({ok:usageHistory.clear()}),
     'pet-height': (_event:any,value:unknown)=>{if(value!==0&&value!==112)return;petHeight=value;reposition();},
@@ -179,16 +199,17 @@ function installHandlers() {
       if (validOrder(patch.order)&&patch.order.every((id:string)=>providerIds.includes(id as ProviderId)||accounts.has(id))) settings.order = [...patch.order];
       const sourceChanged = !connections.states.gemini?.pending && (patch.googleSource === 'antigravity' || patch.googleSource === 'code_assist') && patch.googleSource !== settings.googleSource;
       if (sourceChanged) { settings.googleSource=patch.googleSource; delete connections.states.gemini; }
-      for (const key of ['autoStart','remaining', 'pacing', 'alwaysOnTop', 'notifications','petIdle','petAlerts','petRoam'] as const) if (typeof patch[key] === 'boolean') settings[key] = patch[key];
+      for (const key of ['taskCompletionNotifications','autoStart','remaining', 'pacing', 'alwaysOnTop', 'notifications','petIdle','petAlerts','petRoam'] as const) if (typeof patch[key] === 'boolean') settings[key] = patch[key];
       if (patch.enabled && typeof patch.enabled === 'object') for (const id of providerIds) if (typeof patch.enabled[id] === 'boolean') {
         if(settings.enabled[id]!==patch.enabled[id])diagnostics?.sourceToggle(id,patch.enabled[id]);
         settings.enabled[id] = patch.enabled[id]; poller.setEnabled(id, patch.enabled[id]);
       }
-      win.setAlwaysOnTop(settings.alwaysOnTop);maintainTop(); saveSettings(); publish();
+      win.setAlwaysOnTop(settings.alwaysOnTop);maintainTop();taskBubble?.configure(settings.locale,settings.taskCompletionNotifications);if(settings.taskCompletionNotifications&&!demo)void taskMonitor.start(); saveSettings(); publish();
       if (sourceChanged) {poller.identityChanged('gemini');usageHistory.boundary('gemini','source');void poller.authenticated('gemini');}
       if (!paused) void poller.tick();
     },
     'login': (_event: any, raw: unknown) => {
+      if(typeof raw==='string'&&(providerIds.includes(raw as ProviderId)||accounts.has(raw)))petGrowth.boundary(raw);
       if(accounts.has(raw)){if(!demo){usageHistory.gap(raw,'auth');void accounts.prepareLogin(raw);}return;}
       const id = validateId(raw);
       if (demo) { connections.states[id] = { pending: false, phase: 'error', message: '展示模式不會啟動登入；正常啟動即可連接帳號' }; publish(); return; }
@@ -253,18 +274,23 @@ else {
     readSettings();
     if(!demo&&!testing){if(process.argv.includes('--enable-autostart'))settings.autoStart=true;try{settings.autoStart=syncLoginStartup(app,settings.autoStart,{platform:process.platform,packaged:app.isPackaged,demo,testing,executable:process.execPath});saveSettings();}catch{settings.autoStart=false;}}
     usageHistory=new UsageHistory(path.join(app.getPath('userData'),demo?'demo-usage-history':'usage-history'));
+    petGrowth=new PetGrowth(path.join(app.getPath('userData'),demo?'demo-pet-growth.json':'pet-growth.json'));
+    taskPeak=new TaskPeak(path.join(app.getPath('userData'),demo?'demo-task-peak.json':'task-peak.json'));
+    taskMonitor=new TaskMonitor(testing?(process.env.QUOTA_TEST_SESSION_ROOT||path.join(app.getPath('userData'),'codex-sessions')):path.join(process.env.CODEX_HOME||path.join(homedir(),'.codex'),'sessions'),publish,!demo&&!testing,item=>{diagnostics?.taskNotice('completed',item.provider,'eligible');idleTracker.completion(item.id);if(settings.taskCompletionNotifications&&!paused)taskBubble?.enqueue(item);},()=>{const dir=process.env.CLAUDE_CONFIG_DIR||path.join(homedir(),'.claude');return [...(settings.enabled.claude?[{directory:dir,config:process.env.CLAUDE_CONFIG_DIR?path.join(dir,'.claude.json'):path.join(homedir(),'.claude.json'),label:'Claude'}]:[]),...(accounts?.snapshot().accounts||[]).filter((a:any)=>accounts.snapshot().enabled[a.id]).map((a:any)=>({directory:path.join(app.getPath('userData'),'claude-accounts',a.id),config:path.join(app.getPath('userData'),'claude-accounts',a.id,'.claude.json'),label:a.label}))];});
     diagnostics=new Diagnostics(path.join(app.getPath('userData'),demo?'demo-logs':'logs'));diagnostics.startup(app.getVersion(),settings.enabled);
-    providers = new Providers(new Gemini(new GeminiVault(app.getPath('userData'), safeStorage)), () => settings.googleSource);
-    poller = new Poller(id => demo ? Promise.resolve(demoReading(id)) : providers.read(id), publish,Date.now,(id,reading,time)=>usageHistory.record(id,reading,time,id==='claude'?600000:120000));if(!demo)poller.setMinimumInterval('claude',600000);
-    if(!demo){try{poller.restoreRateLimits(JSON.parse(readFileSync(path.join(app.getPath('userData'),'provider-cooldowns.json'),'utf8')));}catch{/* No prior cooldowns. */}}
+    const web=demo?undefined:new ClaudeWebSession(path.join(app.getPath('userData'),'claude-web','primary'),t);
+    if(web&&!testing)diagnostics.webMigration(await web.importValidation(path.join(app.getPath('appData'),'quota-pebble-web-validation','verified-session.bin')).catch(()=>'failed'));
+    providers = new Providers(new Gemini(new GeminiVault(app.getPath('userData'), safeStorage)), () => settings.googleSource,undefined,web);
+    poller = new Poller(id => demo ? Promise.resolve(demoReading(id)) : providers.read(id), publish,Date.now,(id,reading,time)=>{usageHistory.record(id,reading,time,id==='claude'?600000:120000);petGrowth.record(id,reading,time);});if(!demo)poller.setMinimumInterval('claude',900000);
+    if(!demo){try{const limits=JSON.parse(readFileSync(path.join(app.getPath('userData'),'provider-cooldowns.json'),'utf8'));if(web&&limits.claude?.source!=='claude-web-v1')delete limits.claude;poller.restoreRateLimits(limits);}catch{/* No prior cooldowns. */}}
     connections = new Connections(providers, poller, openAuthUrl, publish, () => {
       if (!quitting && win && !win.isDestroyed()) { setExpanded(true); win.show(); win.focus(); }
     });
     accounts=new Accounts(path.join(app.getPath('userData'),demo?'demo-claude-accounts':'claude-accounts'),directory=>{
-      const service=new Providers(new Gemini(new GeminiVault(app.getPath('userData'),safeStorage)),()=>settings.googleSource,directory);
+      const service=new Providers(new Gemini(new GeminiVault(app.getPath('userData'),safeStorage)),()=>settings.googleSource,directory,demo?undefined:new ClaudeWebSession(path.join(directory,'web-quota'),t));
       if(demo)service.read=async()=>demoReading('claude');
       return service;
-    },openAuthUrl,publish,()=>{if(!quitting&&win&&!win.isDestroyed()){setExpanded(true);win.show();win.focus();}},(id,reading,time)=>usageHistory.record(id,reading,time,600000));
+    },openAuthUrl,publish,()=>{if(!quitting&&win&&!win.isDestroyed()){setExpanded(true);win.show();win.focus();}},(id,reading,time)=>{usageHistory.record(id,reading,time,600000);petGrowth.record(id,reading,time);});
     morningHello=new MorningHello(path.join(app.getPath('userData'),demo?'demo-morning-hello.json':'morning-hello.json'),async id=>{
       if(demo)throw new ProviderError('auth','展示模式不會送出 Hello');
       if(!settings.morningHelloEnabled||paused||(id==='claude'&&(!poller.states.claude.enabled||connections.states.claude?.pending)))throw new ProviderError('auth','Hello 已停用或帳號正在連接');
@@ -288,6 +314,8 @@ else {
       alwaysOnTop: settings.alwaysOnTop, skipTaskbar: true, show: false, title: 'Quota Pebble', icon: path.join(__dirname, 'ui/icons/quota-pebble.png'),
       webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true }
     });
+    petMessages=new PetMessages(path.join(app.getPath('userData'),demo?'demo-pet-messages.json':'pet-messages.json'),publish,undefined,Date.now,!demo&&!testing);petMessageWindow=new PetMessageWindow(win,id=>petMessages.acknowledge(id),()=>!!taskBubble?.isVisible);
+    taskBubble=new TaskBubble(win,id=>{setExpanded(true);win.show();win.webContents.send('task-focus',id);},(kind,provider,stage)=>diagnostics?.taskNotice(kind,provider,stage));taskBubble.configure(settings.locale,settings.taskCompletionNotifications);
     win.setMenu(null); reposition();
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', event => event.preventDefault());
@@ -312,7 +340,8 @@ else {
     powerMonitor.on('suspend', () => { paused = true; publish(); });
     powerMonitor.on('resume', () => { paused = false; publish(); void poller.tick(); });
     await win.loadFile(path.join(__dirname, 'ui/index.html'));
-    win.show();
+    if((settings.compactTaskSummary||settings.taskCompletionNotifications)&&!demo)void taskMonitor.start();
+    win.show();petMessages.start();
     if (!demo) await credentialWatch.scan();
     void poller.tick();
     void accounts.tick();
@@ -321,6 +350,6 @@ else {
       if(!demo&&morningHello){const current:any=snapshot();void morningHello.tick(settings.morningHelloEnabled,settings.morningHelloTime,['claude',...current.accounts.map((a:any)=>a.id)].map((id:string)=>({id,state:current.providers[id],pending:current.auth[id]?.pending})),paused);}
     }, 5000);
   });
-  app.on('before-quit', () => { quitting = true; clearInterval(interval);clearInterval(topTimer); clearTimeout(dragTimer); accounts?.close();providers?.close(); globalShortcut.unregisterAll(); saveSettings(); });
+  app.on('before-quit', () => { quitting = true;petMessageWindow?.close();petMessages?.close(); taskBubble?.close();taskMonitor?.close();clearInterval(interval);clearInterval(topTimer); clearTimeout(dragTimer); accounts?.close();providers?.close(); globalShortcut.unregisterAll(); saveSettings(); });
   app.on('window-all-closed', () => { if (quitting) app.quit(); });
 }

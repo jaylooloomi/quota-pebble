@@ -1,0 +1,17 @@
+import {BrowserWindow,ipcMain,screen} from 'electron';
+import path from 'node:path';
+import {bubbleBounds} from './task-completion';
+import type {PetMessage} from './pet-messages';
+export class PetMessageWindow{
+  private window?:BrowserWindow;private ready=false;private active?:PetMessage;private anchor=45;private timer?:NodeJS.Timeout;private remaining=20000;private started=0;private blocked=false;private hovered=false;private watch:NodeJS.Timeout;
+  constructor(private parent:BrowserWindow,private acknowledge:(id:string)=>void,private guard=()=>false){this.watch=setInterval(this.position,500);this.watch.unref();ipcMain.on('pet-message-close',this.dismiss);ipcMain.on('pet-message-hover',this.hover);parent.on('move',this.position);parent.on('resize',this.position);parent.on('hide',this.suspend);parent.on('show',this.position);}
+  show(message:PetMessage|null,anchor:number,blocked=false){this.blocked=blocked;if(!message){this.suspend();this.active=undefined;return;}if(this.active?.id!==message.id){this.suspend();this.active=message;this.remaining=20000;this.hovered=false;}this.anchor=anchor;
+    if(!this.window){this.window=new BrowserWindow({width:250,height:100,parent:this.parent,frame:false,transparent:true,resizable:false,show:false,skipTaskbar:true,alwaysOnTop:true,focusable:false,webPreferences:{preload:path.join(__dirname,'pet-message-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true}});this.window.setMenu(null);this.window.webContents.setWindowOpenHandler(()=>({action:'deny'}));this.window.webContents.on('will-navigate',e=>e.preventDefault());this.window.webContents.once('did-finish-load',()=>{this.ready=true;this.position();});void this.window.loadFile(path.join(__dirname,'ui/pet-message.html'));}this.position();}
+  private position=()=>{if(!this.ready||!this.active||!this.window||this.parent.isDestroyed()||!this.parent.isVisible()||this.blocked||this.guard()){this.suspend();return;}if(this.hovered&&this.window.isVisible())return;const p=this.parent.getBounds(),b=bubbleBounds(p,screen.getDisplayMatching({...p,height:Math.min(60,p.height)}).workArea,this.anchor,100,250);this.window.setBounds({x:b.x,y:b.y,width:b.width,height:b.height});this.window.webContents.send('pet-message-state',this.active);this.window.showInactive();if(!this.timer&&!this.hovered){this.started=Date.now();this.timer=setTimeout(()=>this.consume(),this.remaining);}};
+  private pause(){if(this.timer){clearTimeout(this.timer);this.timer=undefined;this.remaining=Math.max(1,this.remaining-(Date.now()-this.started));}}
+  private suspend=()=>{this.pause();this.hovered=false;this.window?.hide();};
+  private consume(){const id=this.active?.id;this.suspend();this.active=undefined;if(id)this.acknowledge(id);}
+  private dismiss=(event:Electron.IpcMainEvent)=>{if(event.sender===this.window?.webContents&&event.senderFrame===this.window.webContents.mainFrame)this.consume();};
+  private hover=(event:Electron.IpcMainEvent,inside:unknown)=>{if(event.sender!==this.window?.webContents||event.senderFrame!==this.window.webContents.mainFrame||typeof inside!=='boolean')return;this.hovered=inside;if(inside)this.pause();else this.position();};
+  close(){clearInterval(this.watch);this.suspend();ipcMain.removeListener('pet-message-close',this.dismiss);ipcMain.removeListener('pet-message-hover',this.hover);this.parent.removeListener('move',this.position);this.parent.removeListener('resize',this.position);this.parent.removeListener('hide',this.suspend);this.parent.removeListener('show',this.position);this.window?.destroy();}
+}

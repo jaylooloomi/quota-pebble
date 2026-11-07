@@ -3,6 +3,8 @@ import path from 'node:path';
 export class Diagnostics {
   readonly file:string;
   private previous=new Map<string,string>();
+  private authSeen=new Set<string>();
+  private taskBeat=0;
   constructor(directory:string,private maxBytes=1024*1024){this.file=path.join(directory,'diagnostics.jsonl');}
   private write(event:Record<string,unknown>){
     try{
@@ -13,7 +15,25 @@ export class Diagnostics {
   }
   startup(version:string,enabled:Record<string,boolean>){this.write({event:'startup',version:version.replace(/[^0-9.]/g,'').slice(0,24),enabled:{claude:enabled.claude,codex:enabled.codex,gemini:enabled.gemini}});}
   sourceToggle(provider:string,enabled:boolean){if(['claude','codex','gemini'].includes(provider))this.write({event:'source_toggle',origin:'settings',provider,enabled});}
+  webMigration(stage:string){if(['already-bound','missing-transfer','invalid-transfer','decrypt-failed','imported','failed'].includes(stage))this.write({event:'claude_web_migration',stage});}
+  taskNotice(kind:string,provider:string,stage:string){if(['idle','completed'].includes(kind)&&['codex','claude','antigravity'].includes(provider)&&['eligible','queued','shown','hidden','closed','viewed','expired','cleared'].includes(stage))this.write({event:'task_notice',kind,provider,stage});}
+  taskMonitor(tasks:any,tracker:any,flags:{enabled:boolean;paused:boolean;visible:boolean}){
+    const counts=Object.fromEntries(['codex','claude','antigravity'].map(provider=>[provider,Object.fromEntries(['running','waiting','idle','unknown'].map(status=>[status,(tasks?.rows??[]).filter((r:any)=>(r.provider??'codex')===provider&&r.status===status).length]))]));
+    const decisions:Record<string,number>={};for(const [key,value] of Object.entries(tracker.decisions??{}))if(/^(codex|claude|antigravity):(baseline_running|baseline_nonrunning|observation_lost|running_observed|idle_pending|completed_priority|eligible|task_cooldown|global_cooldown)$/.test(key)&&typeof value==='number'&&Number.isFinite(value))decisions[key]=value;
+    const count=(v:unknown)=>typeof v==='number'&&Number.isInteger(v)&&v>=0&&v<=200?v:0;
+    const summary={event:'task_monitor',enabled:flags.enabled===true,paused:flags.paused===true,visible:flags.visible===true,liveCoverage:tasks?.liveCoverage===true,counts,tracker:{tracked:count(tracker.tracked),armed:count(tracker.armed),pending:count(tracker.pending),decisions}},serialized=JSON.stringify(summary);
+    if(this.previous.get('task-monitor')!==serialized||Date.now()-this.taskBeat>=60000){this.previous.set('task-monitor',serialized);this.taskBeat=Date.now();this.write(summary);}
+  }
   observe(snapshot:any){
+    for(const id of Object.keys(snapshot.auth??{}))if(/^(claude|codex|gemini|claude-account-[0-9a-f-]{36})$/.test(id))this.authSeen.add(id);
+    for(const id of this.authSeen){
+      const auth=snapshot.auth?.[id];
+      const phase=auth?.phase??'none';
+      if(!['none','web_login','authorizing','connecting','code','verifying','syncing','cooldown','waiting','ready','error'].includes(phase))continue;
+      // Phase/flags only: never log the authorization URL, code or messages.
+      const summary={event:'auth_state',provider:id,phase,pending:auth?.pending===true,codeRequired:auth?.codeRequired===true,canReopen:auth?.canReopen===true},serialized=JSON.stringify(summary);
+      if(this.previous.get('auth:'+id)!==serialized){this.previous.set('auth:'+id,serialized);this.write(summary);}
+    }
     for(const [id,r] of Object.entries(snapshot.morningHello??{}) as [string,any][]){
       if(!/^(claude|claude-account-[0-9a-f-]{36})$/.test(id)||!['sending','sent','confirmed','active','error','uncertain'].includes(r?.status))continue;
       const summary={event:'morning_hello',provider:id,status:r.status,day:/^\d{4}-\d\d-\d\d$/.test(r.day)?r.day:null,code:['auth','network','schema','rate_limit','missing_cli','storage'].includes(r.code)?r.code:null},serialized=JSON.stringify(summary);

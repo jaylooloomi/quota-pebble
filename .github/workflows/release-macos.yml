@@ -39,6 +39,7 @@ jobs:
           node scripts/mac-package-smoke.cjs
           node scripts/pet-preview-apply-test.cjs
           node scripts/stage-backgrounds-test.cjs
+          node scripts/companion-features-test.cjs
       - name: Checksums
         run: cd release && shasum -a 256 *.zip > SHA256SUMS-macOS-${{ matrix.arch }}.txt
       - uses: actions/upload-artifact@v4

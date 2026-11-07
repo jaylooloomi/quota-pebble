@@ -72,7 +72,7 @@ export class UsageHistory {
     this.samples=this.samples.filter(s=>s.time>=cutoff&&retained.has(new Date(s.time).toISOString().slice(0,10)));
   }
   query(id:unknown,window:unknown,days:unknown){
-    if(!validProfile(id)||typeof window!=='string'||window.length>240||![1,7,30].includes(days as number))throw new Error('Invalid history query');
+    if(!validProfile(id)||typeof window!=='string'||window.length>240||![1/3,1,7,30].includes(days as number))throw new Error('Invalid history query');
     if(this.now()-this.maintained>=DAY){try{this.prune();this.maintained=this.now();}catch{this.error=true;}}
     const now=this.now(),all=this.samples.filter(s=>s.profile===id&&s.generation===this.generations[id]&&s.time>=now-90*DAY);
     const map=new Map<string,{id:string;label:string;source:string}>();for(const s of all)map.set(JSON.stringify([s.source,s.window]),{id:JSON.stringify([s.source,s.window]),label:s.label,source:s.source});

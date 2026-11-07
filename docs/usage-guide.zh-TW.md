@@ -52,7 +52,7 @@ npm run dist:win
 
 啟動展示：`npx electron . --demo`。畫面中的數字是展示資料，不能作為帳號驗證。
 
-其他系統在各自平台執行 `npm run dist:mac`／`npm run dist:linux`。CI matrix 也會建置三個平台；配置存在不代表已執行成功。macOS 版本尚未簽章／公證，Windows portable 尚未簽章。
+其他系統在各自平台執行 `npm run dist:mac`／`npm run dist:linux`。macOS ARM64／Intel 的 v1.28.2 原生成品已通過 CI 並加入 Release，採 ad-hoc 簽章，未經 Apple 公證。v1.29.0 開發分支另有 Linux AppImage 與打包版 UI 驗證；Windows portable 尚未簽章。完整證據見 [平台驗證](platform-verification-2026-11-04.md)。
 
 ## 授權資料
 
@@ -67,3 +67,9 @@ Claude 與 Codex 由官方 CLI 管理；本工具不自行輪替它們的 refres
 目前讀取的是訂閱配額與重設窗口，不是網路頻寬、API 帳單或本地 token 統計。Antigravity 本機 RPC、Claude 與 Google 配額端點不是穩定公開 API，可能隨上游變更而需要更新。Antigravity 必須保持執行；工具會隨讀取重新發現本機服務的動態連接埠。macOS/Linux 的發現器使用 `ps` 與 `lsof`，尚待實機驗證。
 
 研究與選型：[docs/research.md](research.md)。驗證結果：[docs/verification.md](verification.md)。第三方聲明：[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+
+## 寵物成長與訊息（v1.29.0 開發分支）
+
+設定可查看各角色成長進度；每個角色以實際觀察的週配額增量取得經驗，每日最多 20 XP，不代表實際 token 數。
+外部訊息區可新增 HTTPS RSS／Atom、暫停來源、全域靜音與預覽文字泡。首次讀取只建立基準；後續每 15 分鐘檢查。
+詳見 [功能與限制](companion-growth-and-messages.md)。

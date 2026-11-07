@@ -1,6 +1,6 @@
 {
   "name": "quota-island",
-  "version": "1.17.0",
+  "version": "1.32.3",
   "private": true,
   "description": "A local-first desktop island for Claude, Gemini CLI and Codex quotas",
   "author": "Quota Island",
@@ -36,7 +36,22 @@
     "test:pet-character": "npm run build && node scripts/pet-character-test.cjs",
     "test:pet-preview-apply": "npm run build && node scripts/pet-preview-apply-test.cjs",
     "build:icons": "electron scripts/build-brand-icons.cjs",
-    "test:trends": "npm run build && node scripts/usage-trends-test.cjs"
+    "test:reset-zero": "npm run build && node scripts/reset-zero-trend-test.cjs",
+    "test:relative-trends": "npm run build && node scripts/relative-trends-test.cjs",
+    "test:trends": "npm run build && node scripts/usage-trends-test.cjs",
+    "test:task-peak": "npm run build && node scripts/task-peak-test.cjs",
+    "test:tasks": "npm run build && node scripts/task-monitor-test.cjs",
+    "check:tasks": "npm run build && node scripts/check-task-monitor.cjs",
+    "test:sessions": "npm run build && node scripts/local-sessions-test.cjs",
+    "test:native-completion": "npm run build && node scripts/native-completion-bubble-test.cjs",
+    "test:idle-bubble": "npm run build && node scripts/task-idle-bubble-test.cjs",
+    "test:batched-notices": "npm run build && node scripts/batched-notice-test.cjs",
+    "test:task-bubble": "npm run build && node scripts/task-bubble-test.cjs",
+    "check:native-tasks": "npm run build && node scripts/native-provider-tasks-test.cjs --live",
+    "test:task-filter": "npm run build && node scripts/task-filter-fast-test.cjs",
+    "test:task-lazy": "npm run build && node scripts/task-lazy-audit-test.cjs",
+    "test:claude-web": "npm run build && electron scripts/claude-web-session-test.cjs",
+    "test:messages": "npm run build && node scripts/messages-tab-test.cjs"
   },
   "build": {
     "appId": "app.quota-island.desktop",
@@ -70,7 +85,11 @@
       "category": "Development",
       "target": "AppImage"
     },
-    "icon": "build/icons/quota-pebble.png"
+    "icon": "build/icons/quota-pebble.png",
+    "asarUnpack": [
+      "dist/native/*.ps1",
+      "dist/native/*.exe"
+    ]
   },
   "devDependencies": {
     "@types/node": "26.6.6",
@@ -80,6 +99,8 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "google-auth-library": "10.9.0"
+    "fast-xml-parser": "5.12.0",
+    "google-auth-library": "10.9.0",
+    "ws": "8.22.1"
   }
 }

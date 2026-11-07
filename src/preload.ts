@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('quota', {
+  petFeedConfigure:(action:string,value:unknown)=>ipcRenderer.invoke('pet-feed-configure',action,value),
+  petMessagePreview:()=>ipcRenderer.invoke('pet-message-preview'),
+  petMessagePresent:(id:string|null,anchor:number)=>ipcRenderer.invoke('pet-message-present',id,anchor),
+  taskBubbleAnchor:(x:number|Record<string,number>)=>ipcRenderer.invoke('task-bubble-anchor',x),
+  onTaskFocus:(fn:(id:string)=>void)=>ipcRenderer.on('task-focus',(_event,id)=>fn(id)),
+  taskDiagnosticsCopy:()=>ipcRenderer.invoke('task-diagnostics-copy'),
+  tasksStart:()=>ipcRenderer.invoke('tasks-start'),
   historyQuery:(id:string,window:string,days:number)=>ipcRenderer.invoke('history-query',id,window,days),
   historyClear:()=>ipcRenderer.invoke('history-clear'),
   getState: () => ipcRenderer.invoke('get-state'),

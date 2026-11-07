@@ -9,6 +9,9 @@ const { Providers } = require('../dist/providers');
 const { ClaudeLogin } = require('../dist/claude-login');
 const { ProviderError, parseClaude, parseCodex } = require('../dist/model');
 if (!process.argv.includes('--test-mode') || !process.env.QUOTA_TEST_DATA) throw new Error('Test isolation required');
+// This fixture specifically retains coverage for the legacy authorization-code
+// adapter. Web-session account isolation is exercised by test:claude-web.
+Object.defineProperty(Providers.prototype,'usesClaudeWeb',{get(){return false;}});
 globalThis.__AUTH_TEST_URLS = [];
 shell.openExternal = async url => { globalThis.__AUTH_TEST_URLS.push(url); };
 const makeClient = () => {
@@ -47,7 +50,7 @@ Providers.prototype.login = function(id, open, progress) {
     };
     return {loginId:'fixture-codex-login',authUrl:'https://auth.openai.com/authorize?state=FIXTURE-CODEX'};
   };
-  if (id === 'claude') this.claudeLogin = new ClaudeLogin(() => ({ file:process.execPath, args:[path.join(__dirname,'../test/fixtures/claude-auth.cjs')], env:{...process.env,ELECTRON_RUN_AS_NODE:'1'} }));
+  if (id === 'claude'){this.claudeWeb=undefined;this.claudeLogin = new ClaudeLogin(() => ({ file:process.execPath, args:[path.join(__dirname,'../test/fixtures/claude-auth.cjs')], env:{...process.env,ELECTRON_RUN_AS_NODE:'1'} }));}
   if (id === 'gemini') { this.gemini.makeClient = makeClient; this.googleSource=()=>'code_assist'; }
   return login.call(this,id,open,progress);
 };

@@ -1,5 +1,7 @@
 # 驗證紀錄
 
+目前驗證：參閱 [2026-11-04 平台結果](platform-verification-2026-11-04.md)、[本機與遠端來源限制](provider-monitoring-follow-up.md) 及 [成長／RSS](companion-growth-and-messages.md)。下方為歷史紀錄，其中當時的未驗證項目不代表目前所有狀態。
+
 日期：2026-10-30（Asia/Taipei）。平台：Windows 10 x64。
 
 ## 0.2.0 設計稿落地
