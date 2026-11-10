@@ -1,6 +1,7 @@
 import {taskSourceDiagnostics} from './task-source-diagnostics';
 import {ClaudeWebSession} from './claude-web-session';
 import {PetMessages} from './pet-messages';
+import {RssTitleTranslator} from './rss-translation';
 import {PetMessageWindow} from './pet-message-window';
 import {PetGrowth} from './pet-growth';
 import {CombinedTaskMonitor as TaskMonitor} from './combined-task-monitor';
@@ -314,7 +315,12 @@ else {
       alwaysOnTop: settings.alwaysOnTop, skipTaskbar: true, show: false, title: 'Quota Pebble', icon: path.join(__dirname, 'ui/icons/quota-pebble.png'),
       webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true }
     });
-    petMessages=new PetMessages(path.join(app.getPath('userData'),demo?'demo-pet-messages.json':'pet-messages.json'),publish,undefined,Date.now,!demo&&!testing);petMessageWindow=new PetMessageWindow(win,id=>petMessages.acknowledge(id),()=>!!taskBubble?.isVisible);
+    const liveFeed=!demo&&!testing;
+    petMessages=new PetMessages(
+      path.join(app.getPath('userData'),demo?'demo-pet-messages.json':'pet-messages.json'),
+      publish,undefined,Date.now,liveFeed,liveFeed?new RssTitleTranslator():undefined
+    );
+    petMessageWindow=new PetMessageWindow(win,id=>petMessages.acknowledge(id),()=>!!taskBubble?.isVisible);
     taskBubble=new TaskBubble(win,id=>{setExpanded(true);win.show();win.webContents.send('task-focus',id);},(kind,provider,stage)=>diagnostics?.taskNotice(kind,provider,stage));taskBubble.configure(settings.locale,settings.taskCompletionNotifications);
     win.setMenu(null); reposition();
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
