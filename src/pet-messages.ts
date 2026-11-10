@@ -5,6 +5,7 @@ import https from 'node:https';
 import {randomUUID,createHash} from 'node:crypto';
 import {readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
 import path from 'node:path';
+import type {RssTitleTranslator} from './rss-translation';
 export type PetMessage={id:string;title:string;source:string;time:number;sourceId?:string};
 type Source={id:string;url:string;enabled:boolean;seeded:boolean;seen:string[];checkedAt:number;error:boolean};
 const GITHUB_BLOG_FEED='https://github.blog/feed/';
@@ -29,7 +30,8 @@ export function parseFeed(xml:string):{key:string;title:string;time:number|null}
 }
 export class PetMessages{
   private sources:Source[]=[];private queue:PetMessage[]=[];private busy=false;private timer?:NodeJS.Timeout;private muted=false;private closed=false;private overflow=0;
-  constructor(private file:string,private changed:()=>void,private fetcher=fetchFeed,private now=Date.now,private network=true){
+  private muteGeneration = 0;
+  constructor(private file:string,private changed:()=>void,private fetcher=fetchFeed,private now=Date.now,private network=true,private translator?:Pick<RssTitleTranslator,'translate'>){
     let data:any;
     try{
       const raw=readFileSync(file);
@@ -58,14 +60,60 @@ export class PetMessages{
   snapshot(){return{muted:this.muted,overflow:this.overflow,sources:this.sources.map(s=>({id:s.id,url:s.url,label:s.url===GITHUB_BLOG_FEED?'GitHub Blog':new URL(s.url).hostname,enabled:s.enabled,checkedAt:s.checkedAt,error:s.error})),items:[...this.queue]};}
   start(){if(!this.network||this.closed||this.timer)return;this.timer=setInterval(()=>void this.tick(),60000);this.timer.unref();void this.tick();}
   configure(action:unknown,value:unknown){if(action==='add'){if(this.sources.length>=8)throw Error('FEED_LIMIT');const url=feedUrl(value).href;if(this.sources.some(s=>s.url===url))return;this.sources.push(createSource(url));}
-    else if(action==='mute'){if(typeof value!=='boolean')throw Error('INVALID_FEED_ACTION');this.muted=value;if(value){this.queue=[];this.overflow=0;}}
+    else if(action==='mute'){if(typeof value!=='boolean')throw Error('INVALID_FEED_ACTION');this.muted=value;if(value){this.muteGeneration++;this.queue=[];this.overflow=0;}}
     else if(action==='remove'||action==='toggle'){const source=this.sources.find(s=>s.id===value);if(!source)throw Error('UNKNOWN_FEED');if(action==='remove'){this.sources=this.sources.filter(s=>s!==source);this.queue=this.queue.filter(m=>m.sourceId!==source.id);}else{source.enabled=!source.enabled;if(!source.enabled)this.queue=this.queue.filter(m=>m.sourceId!==source.id);}}
     else throw Error('INVALID_FEED_ACTION');this.save();this.changed();if(action==='add')void this.tick();}
   acknowledge(id:unknown){this.queue=this.queue.filter(m=>m.id!==id);this.changed();}
   preview(){this.enqueue({id:randomUUID(),title:'Hello 👋',source:'Quota Pebble',time:this.now()});this.changed();}
   private enqueue(item:PetMessage){if(this.muted)return;if(this.queue.length>=50){this.queue.shift();this.overflow++;}this.queue.push(item);}
-  async tick(){if(this.busy||this.closed||!this.network||this.muted)return;this.busy=true;try{for(const source of this.sources.filter(s=>s.enabled&&(!s.checkedAt||this.now()-s.checkedAt>=15*60000))){source.checkedAt=this.now();try{const rows=parseFeed(await this.fetcher(source.url));if(this.closed||!this.sources.includes(source)||!source.enabled)continue;const previous=new Set(source.seen);if(source.seeded)for(const row of [...rows].reverse()){if(!previous.has(row.key)&&(row.time===null||row.time>=this.now()-86400000&&row.time<=this.now()+60000)){this.enqueue({id:hash(source.id+row.key),title:row.title,source:new URL(source.url).hostname,sourceId:source.id,time:row.time??this.now()});previous.add(row.key);}}source.seen=[...new Set([...source.seen,...rows.map(r=>r.key)])].slice(-200);source.seeded=true;source.error=false;}catch{source.error=true;}}
-    this.save();this.changed();}finally{this.busy=false;}}
+  async tick(){
+    if(this.busy||this.closed||!this.network||this.muted)return;
+    this.busy=true;
+    const generation=this.muteGeneration;
+    const pending:{source:Source;message:PetMessage}[]=[];
+    const canDeliver=()=>!this.closed&&!this.muted&&generation===this.muteGeneration;
+    const sourceActive=(source:Source)=>source.enabled&&this.sources.includes(source);
+    try{
+      const due=this.sources.filter(s=>s.enabled&&(!s.checkedAt||this.now()-s.checkedAt>=15*60000));
+      for(const source of due){
+        if(!canDeliver())break;
+        if(!sourceActive(source))continue;
+        source.checkedAt=this.now();
+        try{
+          const rows=parseFeed(await this.fetcher(source.url));
+          if(!canDeliver()||!sourceActive(source))continue;
+          const previous=new Set(source.seen);
+          if(source.seeded){
+            const hostname=new URL(source.url).hostname;
+            const now=this.now();
+            for(const row of [...rows].reverse()){
+              if(previous.has(row.key)||(row.time!==null&&(row.time<now-86400000||row.time>now+60000)))continue;
+              pending.push({source,message:{id:hash(source.id+row.key),title:row.title,source:hostname,sourceId:source.id,time:row.time??now}});
+              previous.add(row.key);
+            }
+          }
+          source.seen=[...new Set([...source.seen,...rows.map(r=>r.key)])].slice(-200);
+          source.seeded=true;
+          source.error=false;
+        }catch{source.error=true;}
+      }
+      if(!canDeliver())return;
+      const active=pending.filter(({source})=>sourceActive(source));
+      const recent=active.slice(-50);
+      if(this.translator&&recent.length){
+        try{
+          const translated=await this.translator.translate(recent.map(({message})=>message.title));
+          recent.forEach(({message},i)=>{message.title=clean(translated[i])||message.title;});
+        }catch{/* Translation failure does not prevent RSS delivery. */}
+      }
+      if(canDeliver()){
+        for(const {source,message} of active)if(sourceActive(source))this.enqueue(message);
+      }
+    }finally{
+      this.busy=false;
+      if(!this.closed){this.save();this.changed();}
+    }
+  }
   close(){this.closed=true;clearInterval(this.timer);this.queue=[];}
   private save(){try{mkdirSync(path.dirname(this.file),{recursive:true});writeFileSync(this.file+'.tmp',JSON.stringify({version:2,muted:this.muted,sources:this.sources.map(({url,enabled,seen,seeded})=>({url,enabled,seen,seeded}))}),{mode:0o600});renameSync(this.file+'.tmp',this.file);}catch{/* Feed storage does not stop quota monitoring. */}}
 }
